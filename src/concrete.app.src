@@ -1,0 +1,16 @@
+{application, concrete, [
+    {description, "Erlang port of Hologram — full-stack isomorphic web framework"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {applications, [
+        kernel,
+        stdlib,
+        cowboy,
+        gproc,
+        thoas
+    ]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache-2.0"]},
+    {links, []}
+ ]}.
