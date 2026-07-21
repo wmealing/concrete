@@ -199,7 +199,7 @@ parse_erlang_expr(Str0) ->
             error({parse_error, {bad_expression, Str0, E}})
     end.
 
-%% @name -> maps:get(name, CONCRETE_STATE)
+%% name -> maps:get(name, CONCRETE_STATE)
 rewrite_state_refs(Str) ->
     re:replace(Str, "@([a-z][a-zA-Z0-9_]*)", "maps:get(\\1, CONCRETE_STATE)",
                [global, {return, list}]).
