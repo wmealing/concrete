@@ -1,0 +1,18 @@
+{description, "A new Concrete (isomorphic web framework) application"}.
+{variables, [
+    {name, "my_app", "Name of the OTP application"},
+    {port, "4000", "HTTP listener port"}
+]}.
+
+{dir, "{{name}}"}.
+{dir, "{{name}}/src"}.
+{dir, "{{name}}/priv/templates"}.
+
+{template, "concrete_new_app.erl",      "{{name}}/src/{{name}}_app.erl"}.
+{template, "concrete_new_sup.erl",      "{{name}}/src/{{name}}_sup.erl"}.
+{template, "concrete_new_page.erl",     "{{name}}/src/{{name}}_page.erl"}.
+{template, "concrete_new_page.slab",    "{{name}}/priv/templates/page.slab"}.
+{template, "concrete_new.app.src",      "{{name}}/src/{{name}}.app.src"}.
+{template, "concrete_new_rebar.config", "{{name}}/rebar.config"}.
+{file,     "concrete_new_gitignore",    "{{name}}/.gitignore"}.
+{template, "concrete_new_README.md",    "{{name}}/README.md"}.
