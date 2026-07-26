@@ -12,7 +12,15 @@
 -module(concrete).
 
 -export([compile/1, compile_module/1, compile_to_file/2,
-         runtime_path/0, client_path/0]).
+         runtime_path/0, client_path/0, init/1]).
+
+%% rebar3 plugin entry point: registers rebar_compiler_concrete into
+%% the compiler pipeline for any project that lists `concrete` under
+%% {plugins, ...} / {project_plugins, ...}. rebar3 discovers this via
+%% a module matching the OTP application name.
+-spec init(rebar_state:t()) -> {ok, rebar_state:t()}.
+init(State) ->
+    {ok, rebar_state:append_compilers(State, [rebar_compiler_concrete])}.
 
 %% Compile an Erlang source string (one module) to JavaScript.
 -spec compile(string() | binary()) -> binary().
