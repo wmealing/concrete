@@ -18,7 +18,7 @@ context(AppInfo) ->
 needed_files(_Graph, _FoundFiles, _Mappings, AppInfo) ->
     PLT = concrete_plt:load_or_new(plt_path(AppInfo)),
     PageModules = find_page_modules(AppInfo),
-    Changed = [M || M <- PageModules, bundle_is_stale(M, PLT)],
+    Changed = [M || M <- PageModules, bundle_is_stale(M, PLT, AppInfo)],
     %% rebar_compiler's needed_files/4 contract: {{FirstFiles, FirstOpts},
     %% {RestFiles, Opts}} — we have no priority group, and thread AppInfo
     %% through as the per-file Opts term (compile/4's 4th argument).
@@ -45,7 +45,7 @@ compile(PageModule, _Mappings, _Config, AppInfo) ->
     ok = filelib:ensure_dir(filename:join(OutDir, ".")),
     ok = file:write_file(filename:join(OutDir, Name), JS),
     update_manifest(PageModule, Name, AppInfo),
-    concrete_plt:put(PLT, digest_key(PageModule), module_digest(PageModule)),
+    concrete_plt:put(PLT, digest_key(PageModule), bundle_digest(PageModule, AppInfo)),
     concrete_plt:save(PLT, plt_path(AppInfo)),
     ok.
 
@@ -90,17 +90,41 @@ is_page_module(Module) ->
     catch _:_ -> false
     end.
 
-%% A bundle is stale if the page module's BEAM digest doesn't match the
-%% digest recorded in the PLT the last time its bundle was built (or if
-%% it has never been built).
-bundle_is_stale(Module, PLT) ->
-    case {module_digest(Module), concrete_plt:get(PLT, digest_key(Module))} of
+%% A bundle is stale if the page module's combined digest (BEAM digest
+%% plus, for file-based templates, the template file's contents) doesn't
+%% match the digest recorded in the PLT the last time its bundle was
+%% built (or if it has never been built). The template file has to be
+%% folded in because it's read straight off disk in render_function_js/2
+%% rather than compiled into the module's BEAM, so editing a .slab file
+%% alone wouldn't otherwise change anything this check could see.
+bundle_is_stale(Module, PLT, AppInfo) ->
+    case {bundle_digest(Module, AppInfo), concrete_plt:get(PLT, digest_key(Module))} of
         {Digest, {ok, Digest}} when Digest =/= undefined -> false;
         _ -> true
     end.
 
 digest_key(Module) ->
     {Module, '$concrete_bundle_digest', 0}.
+
+bundle_digest(Module, AppInfo) ->
+    case module_digest(Module) of
+        undefined -> undefined;
+        ModDigest -> crypto:hash(sha256, [ModDigest, template_digest(Module, AppInfo)])
+    end.
+
+%% Inline templates ({inline, DOM}) live in the module source, so the BEAM
+%% digest already accounts for them. File-based templates are read from
+%% disk at bundle-build time and need their own content hash.
+template_digest(Module, AppInfo) ->
+    case Module:template() of
+        {inline, _DOM} -> <<>>;
+        File ->
+            TemplatesDir = filename:join(rebar_app_info:priv_dir(AppInfo), "templates"),
+            case file:read_file(filename:join(TemplatesDir, File)) of
+                {ok, Bin} -> crypto:hash(sha256, Bin);
+                _         -> <<>>
+            end
+    end.
 
 module_digest(Module) ->
     case code:which(Module) of
