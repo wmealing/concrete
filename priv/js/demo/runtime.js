@@ -467,6 +467,60 @@ const Erlang = {
     );
     return Type.atom("ok");
   },
+  // dom:set_html(ElementId, Html) — replace an element's innerHTML.
+  "dom:set_html/2": (id, html) => {
+    document.getElementById(id.value).innerHTML = html.value;
+    return Type.atom("ok");
+  },
+  // dom:get_value(ElementId) — read an <input>/<textarea> element's value.
+  "dom:get_value/1": (id) =>
+    Type.bitstring(document.getElementById(id.value).value),
+  // dom:set_value(ElementId, Value) — set an <input>/<textarea> element's value.
+  "dom:set_value/2": (id, value) => {
+    document.getElementById(id.value).value = value.value;
+    return Type.atom("ok");
+  },
+  // dom:on_click(ContainerId, AttrName, Module, Function) — delegated click
+  // listener: clicks on any descendant with [AttrName] call
+  // Module:Function/1 with that attribute's value (as a bitstring).
+  "dom:on_click/4": (containerId, attrName, mod, fn) => {
+    document.getElementById(containerId.value).addEventListener("click", (e) => {
+      const el = e.target.closest(`[${attrName.value}]`);
+      if (el) {
+        e.preventDefault();
+        Interpreter.call(mod.value, fn.value, 1,
+          [Type.bitstring(el.getAttribute(attrName.value))]);
+      }
+    });
+    return Type.atom("ok");
+  },
+  // dom:on_keydown(ElementId, KeyName, Module, Function) — call
+  // Module:Function/0 when KeyName (e.g. "Enter") is pressed in ElementId.
+  "dom:on_keydown/4": (id, keyName, mod, fn) => {
+    document.getElementById(id.value).addEventListener("keydown", (e) => {
+      if (e.key === keyName.value) {
+        e.preventDefault();
+        Interpreter.call(mod.value, fn.value, 0, []);
+      }
+    });
+    return Type.atom("ok");
+  },
+  // dom:local_storage_get(Key) — read a localStorage key, or the atom
+  // 'undefined' if it isn't set.
+  "dom:local_storage_get/1": (key) => {
+    const v = window.localStorage.getItem(key.value);
+    return v === null ? Type.atom("undefined") : Type.bitstring(v);
+  },
+  // dom:local_storage_set(Key, Value) — write a localStorage key.
+  "dom:local_storage_set/2": (key, value) => {
+    window.localStorage.setItem(key.value, value.value);
+    return Type.atom("ok");
+  },
+  // dom:local_storage_remove(Key) — delete a localStorage key.
+  "dom:local_storage_remove/1": (key) => {
+    window.localStorage.removeItem(key.value);
+    return Type.atom("ok");
+  },
   "maps:get/2": (key, map) => {
     const pair = map.data.find(([k]) => termEqual(k, key));
     if (!pair) throw new Error(`maps:get — key not found: ${termToString(key)}`);
