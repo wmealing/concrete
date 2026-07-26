@@ -166,7 +166,20 @@ update_manifest(PageModule, BundleName, AppInfo) ->
         _ -> #{}
     end,
     Updated = Existing#{atom_to_binary(PageModule) => list_to_binary(BundleName)},
-    file:write_file(Path, thoas:encode(Updated)).
+    ok = file:write_file(Path, thoas:encode(Updated)),
+    notify_asset_server(Updated).
+
+%% concrete_assets holds the manifest it was handed at application boot
+%% and never re-reads it from disk, so a recompile in a live shell (e.g.
+%% via r3:compile/0) would otherwise keep serving stale bundle URLs even
+%% though the file on disk (and priv/concrete_manifest.json) is current.
+%% Best-effort: if the app isn't running (e.g. a plain `rebar3 compile`
+%% outside a shell), there's nothing to notify.
+notify_asset_server(Manifest) ->
+    case whereis(concrete_assets) of
+        undefined -> ok;
+        Pid       -> Pid ! {reload, Manifest}, ok
+    end.
 
 hex(Bin) ->
     lists:flatten([io_lib:format("~2.16.0b", [B]) || <<B>> <= Bin]).
