@@ -50,6 +50,19 @@ find_in_dirs(RelPath, [AppDir | Rest]) ->
 
 serve_file(FilePath, Req) ->
     {ok, Data} = file:read_file(FilePath),
-    {Type, SubType, _} = cow_mimetypes:web(FilePath),
-    ContentType = <<Type/binary, "/", SubType/binary>>,
-    cowboy_req:reply(200, #{<<"content-type">> => ContentType}, Data, Req).
+    cowboy_req:reply(200, #{<<"content-type">> => content_type(FilePath)}, Data, Req).
+
+%% cow_mimetypes:web/1 doesn't know ".mjs" (crashes with a case_clause)
+%% -- ES module scripts need a real JS content-type or the browser
+%% refuses to execute them, so this can't just fall back to
+%% application/octet-stream the way an unrecognized extension normally
+%% would.
+content_type(FilePath) ->
+    case filename:extension(FilePath) of
+        ".mjs" -> <<"text/javascript">>;
+        _ ->
+            case catch cow_mimetypes:web(FilePath) of
+                {Type, SubType, _} -> <<Type/binary, "/", SubType/binary>>;
+                _                  -> <<"application/octet-stream">>
+            end
+    end.
