@@ -5,8 +5,7 @@
 -export([start/2, stop/1]).
 
 start(_Type, _Args) ->
-    Manifest = load_manifest(),
-    case concrete_sup:start_link(Manifest) of
+    case concrete_sup:start_link() of
         {ok, Pid} ->
             PageModules = page_modules(),
             {ok, _} = concrete_router:start(PageModules),
@@ -17,24 +16,6 @@ start(_Type, _Args) ->
 
 stop(_State) ->
     ok.
-
-%% The manifest is written by rebar_compiler_concrete into the priv/ of
-%% whichever top-level project actually has page modules — not
-%% necessarily (usually not) concrete's own priv dir — so this scans
-%% every application on the code path, same as page_modules/0 below.
-load_manifest() ->
-    Dirs = lists:usort([filename:dirname(Dir) || Dir <- code:get_path()]),
-    lists:foldl(fun(AppDir, Acc) ->
-        Path = filename:join([AppDir, "priv", "concrete_manifest.json"]),
-        case file:read_file(Path) of
-            {ok, Bin} ->
-                case thoas:decode(Bin) of
-                    {ok, Map} -> maps:merge(Acc, Map);
-                    _         -> Acc
-                end;
-            {error, _} -> Acc
-        end
-    end, #{}, Dirs).
 
 %% Scans the code path on disk rather than code:all_loaded/0: concrete
 %% (and this callback) typically starts before the application that
