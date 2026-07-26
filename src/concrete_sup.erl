@@ -11,7 +11,13 @@ start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 init([]) ->
-    SupFlags = #{strategy => one_for_one, intensity => 5, period => 10},
+    %% A live rebar3 shell recompile purges old module code, which can
+    %% kill several of these children at once as part of the reload --
+    %% not an actual failure. The default intensity (5 per 10s) is tuned
+    %% for real crash loops and gets exhausted by a couple of dev-time
+    %% recompiles, taking the whole supervision tree down. Widen it so
+    %% routine recompiling doesn't trip max_restart_intensity.
+    SupFlags = #{strategy => one_for_one, intensity => 50, period => 10},
     Children = [
         #{id => concrete_pg,
           start => {pg, start_link, [concrete_pubsub]},
