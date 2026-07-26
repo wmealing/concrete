@@ -36,10 +36,16 @@ find_asset(RelPath) ->
 
 find_in_dirs(_RelPath, []) -> error;
 find_in_dirs(RelPath, [AppDir | Rest]) ->
-    Candidate = filename:join([AppDir, "priv", "js", RelPath]),
-    case filelib:is_regular(Candidate) of
-        true  -> {ok, Candidate};
-        false -> find_in_dirs(RelPath, Rest)
+    %% rebar_compiler_concrete writes page bundles under priv/js/bundles/,
+    %% but the manifest URL (built in concrete_assets) has no "bundles/"
+    %% segment, so both roots have to be tried; other assets (runtime.js,
+    %% client.js, ...) are referenced by their real relative path and are
+    %% found directly under priv/js/.
+    Candidates = [filename:join([AppDir, "priv", "js", RelPath]),
+                  filename:join([AppDir, "priv", "js", "bundles", RelPath])],
+    case lists:filter(fun filelib:is_regular/1, Candidates) of
+        [Found | _] -> {ok, Found};
+        []          -> find_in_dirs(RelPath, Rest)
     end.
 
 serve_file(FilePath, Req) ->
