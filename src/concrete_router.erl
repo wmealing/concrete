@@ -46,5 +46,5 @@ system_routes() ->
         {"/concrete/command",      concrete_command_handler, #{}},
         {"/concrete/sse",          concrete_sse_handler,     #{}},
         {"/concrete/ws",           concrete_ws_handler,      #{}},
-        {"/concrete/assets/[...]", cowboy_static, {priv_dir, concrete, "js"}}
+        {"/concrete/assets/[...]", concrete_asset_handler, #{}}
     ].
