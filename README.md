@@ -17,6 +17,58 @@ including how to use the generated JavaScript in your own pages.
 rebar3 compile
 ```
 
+## Creating a new Concrete app
+
+Concrete ships a `rebar3 new` template that scaffolds a minimal app: a
+supervised OTP application with one routed page module, a `.slab`
+template, and `rebar.config` already wired to Concrete's compiler
+plugin.
+
+Add Concrete as a plugin so `rebar3 new` can find the template — either
+globally in `~/.config/rebar3/rebar.config`:
+
+```erlang
+{plugins, [
+    {concrete, {git, "https://github.com/wmealing/concrete.git", {branch, "main"}}}
+]}.
+```
+
+or per-project, in an existing project's `rebar.config`. Then generate
+the new app:
+
+```
+rebar3 new concrete_app name=my_app port=4001
+```
+
+This creates `my_app/` with:
+
+```
+my_app/
+├── src/
+│   ├── my_app_app.erl     -- application callback, starts my_app_sup
+│   ├── my_app_sup.erl     -- top-level supervisor
+│   ├── my_app_page.erl    -- page module routed at "/", with a counter action/3
+│   └── my_app.app.src
+├── priv/templates/
+│   └── page.slab          -- the counter's template
+├── config/
+│   └── sys.config         -- sets the concrete app's listen port
+├── rebar.config           -- depends on concrete, registers its compiler plugin,
+│                              loads config/sys.config into the shell
+└── README.md
+```
+
+`port` defaults to `4000` if omitted. Build and run it:
+
+```
+cd my_app
+rebar3 shell
+```
+
+Then visit `http://localhost:4001/` — the +/− buttons dispatch
+`my_app_page:action/3`, compiled to JavaScript at build time by
+`rebar_compiler_concrete` and executed in the browser.
+
 ## Running the tests
 
 ### All suites
@@ -300,15 +352,17 @@ Round-trip equal: true
 
 ## rebar3 compiler plugin
 
-`plugin/rebar_compiler_concrete.erl` is the intended Phase 6 integration
-point: a `rebar_compiler` behaviour implementation that would let
-`rebar3 compile` produce page bundles directly, instead of driving the
-pipeline by hand from the shell (`concrete_demo:bundle()` etc., as shown
-above). **It is not currently wired into `rebar.config`** — the module
-exists but isn't registered as an active compiler, so `rebar3 compile`
-does not invoke it yet.
+`src/rebar_compiler_concrete.erl` is a `rebar_compiler` behaviour
+implementation that lets `rebar3 compile` produce page bundles directly,
+instead of driving the pipeline by hand from the shell
+(`concrete_demo:bundle()` etc., as shown above). It's registered as an
+active compiler via `concrete:init/1`, which rebar3 calls automatically
+for any project that lists `concrete` under `{plugins, ...}` or
+`{project_plugins, ...}` — this is exactly what `rebar3 new concrete_app`
+scaffolds, see [Creating a new Concrete app](#creating-a-new-concrete-app)
+above.
 
-What it does, once wired up:
+What it does:
 
 1. **`context/1`** tells rebar3 where to look — Erlang source in `src/`,
    compiling to `.mjs` under `priv/js/bundles`. This is how it plugs into
@@ -316,39 +370,39 @@ What it does, once wired up:
    `.erl → .beam` compiler pass.
 2. **`needed_files/4`** scans compiled `.beam` files in `ebin/` for
    modules implementing `-behaviour(concrete_page)`, using
-   `module_info(attributes)`, and returns those as the set to (re)bundle.
-   The actual staleness check (comparing a module's digest against the
-   PLT) is stubbed to always return `true` for now — every page module
-   rebuilds on every compile.
+   `module_info(attributes)`, and returns those whose BEAM digest has
+   changed since the last build (checked against the digest recorded in
+   the PLT) as the set to (re)bundle.
 3. **`compile/4`** does the real work per page module: loads the PLT
    (`concrete_plt`), walks the module's call graph
    (`concrete_call_graph:build/2`) pulling IR for any newly-reachable
    `{M,F,A}` out of BEAM abstract code (`concrete_beam_reader`), encodes
-   the reachable graph to JS (`concrete_encoder:encode_bundle/2`), and
-   writes the result as a content-addressed file —
-   `<page_module>_<sha256>.mjs` — under `priv/js/bundles/`. It also
-   updates `concrete_manifest.json` (page module → bundle filename) so
-   the server handlers know which bundle to serve for a given page, and
-   persists the updated PLT back to disk.
+   the reachable graph to JS (`concrete_encoder:encode_bundle/2`), parses
+   the page's `.slab` template into a client-side `render/1` function and
+   appends it to the same bundle, and writes the result as a
+   content-addressed file — `<page_module>_<sha256>.mjs` — under
+   `priv/js/bundles/`. It also updates `concrete_manifest.json` (page
+   module → bundle filename) so the server handlers know which bundle to
+   serve for a given page, and persists the updated PLT (including the
+   new digest) back to disk.
 4. **`dependencies/3`** and **`clean/2`** are no-ops for now — incremental
    dependency wiring and cleanup of generated bundles aren't implemented.
 
 In short, this is the same pipeline the shell demos exercise manually
 (`concrete_beam_reader` → `concrete_plt` → `concrete_call_graph` →
-`concrete_encoder`), packaged so rebar3 can eventually run it as a
-first-class compile step for every `concrete_page` module in the project.
+`concrete_encoder`), packaged as a first-class compile step that runs for
+every `concrete_page` module in the project on `rebar3 compile`.
 
 ## Project structure
 
 ```
 concrete/
-├── src/               Erlang source modules
+├── src/               Erlang source modules, incl. rebar_compiler_concrete
 ├── include/           concrete_ir.hrl — IR record definitions
 ├── test/              Common Test suites
-├── plugin/            rebar_compiler_concrete — rebar3 compiler plugin
 ├── priv/js/demo/      Concrete JS runtime (runtime.js, client.js) + demos
 ├── priv/js/upstream/  Unadapted upstream Hologram JS (reference/parts bin)
-├── priv/templates/    .slab templates
+├── priv/templates/    .slab templates + rebar3 new project generator
 └── rebar.config
 ```
 
