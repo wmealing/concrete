@@ -3,9 +3,9 @@
 -export([start/2, stop/1]).
 
 start(_Type, _Args) ->
-    %% concrete_router reads its listen port from the `concrete` app's own
-    %% env, not this app's — set it before starting concrete so it takes.
-    ok = application:set_env(concrete, port, {{port}}),
+    %% concrete is a required application (see {{name}}.app.src), so it has
+    %% already started by the time this runs; its listen port comes from
+    %% config/sys.config, read before boot -- see the `concrete` env there.
     {ok, _} = application:ensure_all_started(concrete),
     {{name}}_sup:start_link().
 
