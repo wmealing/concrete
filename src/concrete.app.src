@@ -1,7 +1,8 @@
 {application, concrete, [
     {description, "Erlang port of Hologram — full-stack isomorphic web framework"},
     {vsn, "0.1.0"},
-    {registered, []},
+    {registered, [concrete_sup, concrete_assets, concrete_registry]},
+    {mod, {concrete_app, []}},
     {applications, [
         kernel,
         stdlib,
@@ -9,7 +10,7 @@
         gproc,
         thoas
     ]},
-    {env, []},
+    {env, [{port, 4000}]},
     {modules, []},
     {licenses, ["Apache-2.0"]},
     {links, []}
