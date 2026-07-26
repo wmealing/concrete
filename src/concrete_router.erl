@@ -6,7 +6,12 @@
 -spec start([module()]) -> {ok, pid()}.
 start(PageModules) ->
     Dispatch = cowboy_router:compile([{'_', routes(PageModules)}]),
-    cowboy:start_clear(concrete_http, [{port, 4000}], #{
+    Port = application:get_env(concrete, port, 4000),
+    TransportOpts = case application:get_env(concrete, ip) of
+        {ok, Ip}  -> [{port, Port}, {ip, Ip}];
+        undefined -> [{port, Port}]
+    end,
+    cowboy:start_clear(concrete_http, TransportOpts, #{
         env => #{dispatch => Dispatch}
     }).
 
@@ -24,13 +29,16 @@ page_routes(Modules) ->
 
 route_for(Module) ->
     Attrs = Module:module_info(attributes),
+    %% -concrete([{route, "/"}, ...]) is a single custom attribute, so
+    %% module_info(attributes) pairs `concrete` directly with that
+    %% proplist (Opts) — not a further-nested list of proplists.
     case [V || {concrete, V} <- Attrs] of
-        [[Opts | _] | _] ->
+        [Opts | _] ->
             case proplists:get_value(route, Opts) of
                 undefined -> error;
                 Route     -> {ok, Route}
             end;
-        _ -> error
+        [] -> error
     end.
 
 system_routes() ->

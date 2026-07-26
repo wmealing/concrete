@@ -2,15 +2,31 @@
 -module(concrete_call_graph).
 -include("concrete_ir.hrl").
 
--export([build/2, reachable/1]).
+-export([build/2, build_from_entries/2, reachable/1]).
 
 -type mfa_key() :: {module(), atom(), arity()}.
 
-%% Build a call graph rooted at the page module's entry points.
+%% Build a call graph rooted at the page/component module's entry
+%% points: init/2 and template/0 are always roots (the JS runtime calls
+%% them directly, not via any traceable Erlang call); action/3 and
+%% command/3 are roots too when present — the browser dispatches to
+%% them directly from a concrete-click handler, never via a call
+%% reachable from init/2, so plain call-graph tracing would otherwise
+%% mark them (wrongly) as dead code.
 -spec build(module(), term()) -> digraph:graph().
 build(PageModule, PLT) ->
+    BaseEntries = [{PageModule, init, 2}, {PageModule, template, 0}],
+    ExtraEntries = [E || E <- [{PageModule, action, 3}, {PageModule, command, 3}],
+                          concrete_plt:get(PLT, E) =/= not_found],
+    build_from_entries(BaseEntries ++ ExtraEntries, PLT).
+
+%% Build a call graph rooted at an explicit list of entry MFAs — used to
+%% additionally root the graph at component modules embedded via
+%% <:component> template tags, which aren't reachable through ordinary
+%% Erlang calls in the page module's own code.
+-spec build_from_entries([mfa_key()], term()) -> digraph:graph().
+build_from_entries(Entries, PLT) ->
     G = digraph:new(),
-    Entries = [{PageModule, init, 2}, {PageModule, template, 0}],
     walk(Entries, G, PLT, sets:new()),
     G.
 

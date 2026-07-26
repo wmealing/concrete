@@ -6,7 +6,13 @@
 -spec start_link() -> {ok, pid()}.
 start_link() ->
     %% gproc starts as part of its own application; this is a thin facade.
-    {ok, spawn_link(fun() -> receive stop -> ok end end)}.
+    {ok, spawn_link(fun loop/0)}.
+
+loop() ->
+    receive
+        stop -> ok;
+        _    -> loop()
+    end.
 
 -spec register(term(), pid()) -> true.
 register(Id, Pid) ->
