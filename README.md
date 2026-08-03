@@ -136,7 +136,7 @@ The compiler pipeline can be driven interactively from the Erlang shell.
 ### Start the shell
 
 ```
-rebar3 shell
+rebar3 as example shell
 ```
 
 ### Compile any Erlang source string to JavaScript
@@ -195,10 +195,10 @@ tick(N) ->
 Start the shell, regenerate the compiled JS, and serve it:
 
 ```
-rebar3 shell
+rebar3 as example shell
 ```
 ```erlang
-concrete_demo:build().    % compiles the counter source to priv/js/demo/counter.js
+concrete_demo:build().    % compiles the counter source to priv/js/demo/counter/counter.js
 concrete_demo:serve().    % static file server on http://localhost:8765
 ```
 
@@ -207,6 +207,12 @@ Then open http://localhost:8765 in your browser. To use a different port:
 ```erlang
 concrete_demo:serve(9000).
 ```
+
+There are several other demos under `example/` (todo list, canvas animation,
+a `gen_server`-style process, a spawn/self/send/receive process-ring
+visualization, ...), each with its own runner module and port. Run
+`demo_parent:serve().` (from `rebar3 as example shell`) to build and start
+all of them at once and get a linked index page at http://localhost:8760.
 
 The page loads:
 
@@ -300,7 +306,7 @@ the HTML plus the type-tagged state JSON used for client hydration.
 `template_demo` serves a real page module over HTTP with working buttons:
 
 ```
-rebar3 shell
+rebar3 as example shell
 ```
 ```erlang
 template_demo:serve().    % http://localhost:8766

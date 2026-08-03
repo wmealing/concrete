@@ -94,6 +94,7 @@ page_shell(HTML, StateJSON) ->
        "          overflow-x: auto; max-width: 60rem; }\n"
        "  </style>\n"
        "</head>\n<body>\n"
+       "  <p><a href=\"http://localhost:8760/\">&larr; All demos</a></p>\n"
        "  <p>Server-rendered by <code>concrete_renderer:render_page/2</code>,\n"
        "     then hydrated — the +/&#8722; buttons dispatch to the compiled\n"
        "     <code>scoreboard_page:action/3</code> running in your browser.\n"
