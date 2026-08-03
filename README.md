@@ -17,6 +17,35 @@ including how to use the generated JavaScript in your own pages.
 rebar3 compile
 ```
 
+## Try the demos
+
+The fastest way to see Concrete running is the parent demo index: it builds
+and starts every example below on its own port, then serves a page linking
+to all of them.
+
+```
+rebar3 as example shell
+```
+```erlang
+demo_parent:serve().
+```
+
+Then open **http://localhost:8760**.
+
+| Demo | Port | What it shows |
+|---|---|---|
+| Counter | 8765 | The smallest possible demo: a self-rescheduling counter loop, pure Erlang compiled straight to JavaScript. |
+| Template / Scoreboard | 8766 | A `.slab` template rendered server-side on first load, then hydrated — button clicks dispatch to a compiled `action/3` running in the browser. |
+| Todo List | 8767 | A small stateful app (add/complete/clear) persisted to `localStorage`, entirely compiled Erlang — no server round trips. |
+| Canvas Animation | 8768 | A self-scheduling animation loop drawing a rotating flower on `<canvas>` via the `canvas:*` BIFs. |
+| gen_server-style Process | 8769 | A real `spawn`/`self`/`!`/`receive` generic-server loop (`concrete_gen_server.erl`) dispatching into a callback module, running in the browser. |
+| Process Ring (spawn/self/send/receive) | 8770 | Six spawned worker processes passing a token around a ring, with a live canvas visualization of every send/receive hop. |
+
+Each demo also has its own runner module (`concrete_demo`, `template_demo`,
+`todo_demo`, `canvas_demo`, `gen_server_demo`, `process_viz_demo`) if you'd
+rather build and serve just one — see the walkthroughs below, starting with
+the counter demo.
+
 ## Creating a new Concrete app
 
 Concrete ships a `rebar3 new` template that scaffolds a minimal app: a
@@ -208,11 +237,7 @@ Then open http://localhost:8765 in your browser. To use a different port:
 concrete_demo:serve(9000).
 ```
 
-There are several other demos under `example/` (todo list, canvas animation,
-a `gen_server`-style process, a spawn/self/send/receive process-ring
-visualization, ...), each with its own runner module and port. Run
-`demo_parent:serve().` (from `rebar3 as example shell`) to build and start
-all of them at once and get a linked index page at http://localhost:8760.
+See [Try the demos](#try-the-demos) above for the other example apps.
 
 The page loads:
 
