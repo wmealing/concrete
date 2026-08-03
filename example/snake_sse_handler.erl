@@ -14,13 +14,17 @@
 
 init(Req, State) ->
     Secret = cowboy_req:binding(secret, Req),
-    ok = snake_game:join(Secret, self()),
+    {ok, MyColor} = snake_game:join(Secret, self()),
     concrete_pubsub:subscribe(snake_board, self()),
     Req2 = cowboy_req:stream_reply(200,
         #{<<"content-type">>  => <<"text/event-stream">>,
           <<"cache-control">> => <<"no-cache">>}, Req),
-    %% An immediate snapshot so the client can draw before the next tick.
-    send_board(Req2, snake_game:board()),
+    %% An immediate snapshot so the client can draw before the next
+    %% tick -- and, only this once, this connection's own color, so it
+    %% can tell its snake apart from everyone else's (board_term/1
+    %% never broadcasts whose is whose to the group at large).
+    InitialBoard = (snake_game:board())#{my_color => MyColor},
+    send_board(Req2, InitialBoard),
     {cowboy_loop, Req2, State#{secret => Secret}}.
 
 info({concrete_event, Board}, Req, State) ->

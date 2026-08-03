@@ -135,6 +135,7 @@ let nextRefId = 1;
 // check, later in this same call stack.
 const activeSteps = new Set();
 let uiPid = null;
+const uiStore = new Map();
 
 // 2D contexts for <canvas> elements, cached by element id.
 const canvasContexts = {};
@@ -850,15 +851,29 @@ const Erlang = {
   // terminal CLOSED state and open a fresh EventSource ourselves.
   "sse:connect/3": (path, mod, fn) => {
     const RETRY_MS = 1000;
+    let attempt = 0;
     const open = () => {
+      attempt += 1;
+      const label = `[sse:connect ${path.value}]`;
+      console.log(`${label} connecting (attempt ${attempt})`);
       const source = new EventSource(path.value);
+      // Fires both for this attempt's own initial connect *and* every
+      // time the browser's built-in retry succeeds on the same
+      // EventSource object (it doesn't get recreated for that) -- so
+      // this line alone surfaces every reconnect, ours or theirs.
+      source.onopen = () => {
+        console.log(`${label} connected`);
+      };
       source.onmessage = (e) => {
         const term = wireToTerm(JSON.parse(e.data));
         Interpreter.callTopLevel(mod.value, fn.value, 1, [term]);
       };
       source.onerror = () => {
         if (source.readyState === EventSource.CLOSED) {
+          console.log(`${label} connection closed for good; reconnecting in ${RETRY_MS}ms`);
           setTimeout(open, RETRY_MS);
+        } else {
+          console.log(`${label} connection error (readyState=${source.readyState}); browser will retry`);
         }
       };
     };
@@ -947,13 +962,19 @@ const Erlang = {
     return Type.atom("ok");
   },
 
-  // --- ui module: a tiny demo-only global slot for holding a pid
-  // across separate cold top-level calls (one dom:on_click dispatch
-  // per click has no shared JS closure state) -- this runtime has no
-  // process registry (register/whereis) yet, so the gen_server demo
-  // needs *some* place to remember the spawned server's pid.
+  // --- ui module: demo-only slots for holding values across separate
+  // cold top-level calls (one dom:on_click dispatch per click has no
+  // shared JS closure state) -- this runtime has no process registry
+  // (register/whereis) yet, so demos need *some* place to remember
+  // e.g. a spawned server's pid, or a session secret.
   "ui:set_pid/1": (pid) => { uiPid = pid; return Type.atom("ok"); },
   "ui:get_pid/0": () => uiPid,
+  // A general keyed version of the above, for demos juggling more than
+  // one value (see snake_client.erl: session secret + own color).
+  // ui:get/1 returns the atom 'undefined' for a key never set.
+  "ui:set/2": (key, value) => { uiStore.set(termToPlainJs(key), value); return Type.atom("ok"); },
+  "ui:get/1": (key) =>
+    uiStore.has(termToPlainJs(key)) ? uiStore.get(termToPlainJs(key)) : Type.atom("undefined"),
 
   "maps:get/2": (key, map) => {
     const pair = map.data.find(([k]) => termEqual(k, key));
@@ -963,6 +984,10 @@ const Erlang = {
   "maps:get/3": (key, map, def) => {
     const pair = map.data.find(([k]) => termEqual(k, key));
     return pair ? pair[1] : def;
+  },
+  "maps:find/2": (key, map) => {
+    const pair = map.data.find(([k]) => termEqual(k, key));
+    return pair ? Type.tuple([Type.atom("ok"), pair[1]]) : Type.atom("error");
   },
 };
 

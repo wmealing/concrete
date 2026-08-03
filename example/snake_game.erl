@@ -51,8 +51,11 @@ start_link() ->
 %% Pid is monitored so the player is removed automatically if it dies
 %% (i.e. the browser's SSE connection closes) -- see the module header.
 %% Joining with a Secret that's already playing resumes it (same body,
-%% direction, alive-ness) rather than spawning a fresh snake.
--spec join(binary(), pid()) -> ok.
+%% direction, alive-ness) rather than spawning a fresh snake. Returns
+%% this player's color -- board_term/1 never includes whose snake is
+%% whose (see its own comment), so this is the only way the owning
+%% client learns which one to highlight as its own.
+-spec join(binary(), pid()) -> {ok, non_neg_integer()}.
 join(Secret, Pid) ->
     gen_server:call(?MODULE, {join, Secret, Pid}).
 
@@ -83,15 +86,17 @@ handle_call({join, Secret, Pid}, _From, State) ->
             %% the new connection's pid; body/alive/etc. carry over.
             %% last_seen_tick does update here, though -- that's what
             %% "last connected/reconnected" in the legend means.
+            log_join(reconnect, Secret, Pid),
             State2 = State#{players := Players#{Secret := Existing#{pid := Pid, last_seen_tick := Tick}}},
-            {reply, ok, State2};
+            {reply, {ok, maps:get(color, Existing)}, State2};
         error ->
+            log_join(new_player, Secret, Pid),
             Player = #{color => Hue, body => new_body(Players), dir => right,
                        pending => right, alive => true, respawn_at => undefined, pid => Pid,
                        last_seen_tick => Tick},
             State2 = State#{players := Players#{Secret => Player},
                              next_hue := (Hue + 67) rem 360},
-            {reply, ok, State2}
+            {reply, {ok, Hue}, State2}
     end;
 handle_call(board, _From, State) ->
     {reply, board_term(State), State}.
@@ -114,11 +119,32 @@ handle_info(tick, State) ->
     State2 = step(State),
     concrete_pubsub:broadcast(snake_board, board_term(State2)),
     {noreply, State2};
-handle_info({'DOWN', _Ref, process, Pid, _Reason}, #{players := Players} = State) ->
+handle_info({'DOWN', _Ref, process, Pid, Reason}, #{players := Players} = State) ->
+    %% A 'DOWN' for a pid that's no longer this player's *current* one
+    %% (superseded by a later reconnect, see the {join, ...} clause
+    %% above) is expected and a correct no-op, not a removal -- log
+    %% only the secrets actually leaving the board.
+    Leaving = [S || {S, #{pid := P}} <- maps:to_list(Players), P =:= Pid],
+    lists:foreach(fun(S) -> log_leave(S, Pid, Reason) end, Leaving),
     Players2 = maps:filter(fun(_Secret, #{pid := P}) -> P =/= Pid end, Players),
     {noreply, State#{players := Players2}};
 handle_info(_Msg, State) ->
     {noreply, State}.
+
+%% Diagnostic logging for "a snake vanished and came back" reports: a
+%% `reconnect` for the same secret shortly after a `leave` is a dropped
+%% -and-resumed SSE stream (expected, see the module header); a
+%% `new_player` where you expected a `reconnect` means the *page*
+%% reloaded (a fresh secret was minted), not just the stream.
+log_join(new_player, Secret, Pid) ->
+    io:format("[snake_game] new player ~s (~p)~n", [short(Secret), Pid]);
+log_join(reconnect, Secret, Pid) ->
+    io:format("[snake_game] ~s reconnected (~p)~n", [short(Secret), Pid]).
+
+log_leave(Secret, Pid, Reason) ->
+    io:format("[snake_game] ~s left (pid ~p down: ~p)~n", [short(Secret), Pid, Reason]).
+
+short(Secret) -> binary:part(Secret, 0, 8).
 
 %% --- Game loop ---
 
