@@ -115,7 +115,7 @@ step_player(Id, #{alive := true, pending := Dir, body := [Head | _] = Body} = P,
             Players, Food, Tick, Acc, AteAcc) ->
     NewHead = move(Head, Dir),
     Others = lists:append([B || {OId, #{alive := true, body := B}} <- maps:to_list(Players), OId =/= Id]),
-    case dead(NewHead, Others, Body) of
+    case dead(NewHead, Others) of
         true ->
             {Acc#{Id := P#{alive := false, respawn_at := Tick + ?RESPAWN_TICKS}}, AteAcc};
         false ->
@@ -127,15 +127,19 @@ step_player(Id, #{alive := true, pending := Dir, body := [Head | _] = Body} = P,
             {Acc#{Id := P#{dir := Dir, body := NewBody}}, AteAcc orelse Grow}
     end.
 
-dead({X, Y}, _Others, _SelfBody) when X < 0; X >= ?WIDTH; Y < 0; Y >= ?HEIGHT ->
-    true;
-dead(Head, Others, SelfBody) ->
-    lists:member(Head, Others) orelse lists:member(Head, lists:droplast(SelfBody)).
+%% Running into another snake's body is the only way to die -- the
+%% edges of the board wrap (see move/2) and a snake can freely cross
+%% its own body.
+dead(Head, Others) ->
+    lists:member(Head, Others).
 
-move({X, Y}, up)    -> {X, Y - 1};
-move({X, Y}, down)  -> {X, Y + 1};
-move({X, Y}, left)  -> {X - 1, Y};
-move({X, Y}, right) -> {X + 1, Y}.
+%% The board wraps: moving off one edge brings you back on the other.
+move({X, Y}, up)    -> {X, wrap(Y - 1, ?HEIGHT)};
+move({X, Y}, down)  -> {X, wrap(Y + 1, ?HEIGHT)};
+move({X, Y}, left)  -> {wrap(X - 1, ?WIDTH), Y};
+move({X, Y}, right) -> {wrap(X + 1, ?WIDTH), Y}.
+
+wrap(V, Max) -> (V + Max) rem Max.
 
 opposite(up, down)    -> true;
 opposite(down, up)    -> true;
