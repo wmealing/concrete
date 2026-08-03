@@ -12,9 +12,9 @@ websocket_init(State) ->
 
 websocket_handle({text, Msg}, State) ->
     case thoas:decode(Msg) of
-        #{<<"type">> := <<"action">>} = Payload ->
+        {ok, #{<<"type">> := <<"action">>} = Payload} ->
             handle_action(Payload, State);
-        #{<<"type">> := <<"command">>} = Payload ->
+        {ok, #{<<"type">> := <<"command">>} = Payload} ->
             handle_command(Payload, State);
         _ ->
             {[], State}

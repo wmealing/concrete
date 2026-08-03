@@ -6,10 +6,10 @@
 
 init(Req, State) ->
     {ok, Body, Req2} = cowboy_req:read_body(Req),
-    #{<<"module">>  := ModuleBin,
-      <<"command">> := CommandBin,
-      <<"params">>  := Params,
-      <<"state">>   := ClientState} = thoas:decode(Body),
+    {ok, #{<<"module">>  := ModuleBin,
+           <<"command">> := CommandBin,
+           <<"params">>  := Params,
+           <<"state">>   := ClientState}} = thoas:decode(Body),
     Module      = binary_to_existing_atom(ModuleBin),
     Command     = binary_to_existing_atom(CommandBin),
     ErlState    = concrete_deserializer:decode(ClientState),
