@@ -40,11 +40,12 @@ Then open **http://localhost:8760**.
 | Canvas Animation | 8768 | A self-scheduling animation loop drawing a rotating flower on `<canvas>` via the `canvas:*` BIFs. |
 | gen_server-style Process | 8769 | A real `spawn`/`self`/`!`/`receive` generic-server loop (`concrete_gen_server.erl`) dispatching into a callback module, running in the browser. |
 | Process Ring (spawn/self/send/receive) | 8770 | Six spawned worker processes passing a token around a ring, with a live canvas visualization of every send/receive hop. |
+| Multiplayer Snake | 8771 | A real `gen_server` owns the board and broadcasts it over SSE to every connected browser — open it in two tabs and watch both snakes move live. |
 
 Each demo also has its own runner module (`concrete_demo`, `template_demo`,
-`todo_demo`, `canvas_demo`, `gen_server_demo`, `process_viz_demo`) if you'd
-rather build and serve just one — see the walkthroughs below, starting with
-the counter demo.
+`todo_demo`, `canvas_demo`, `gen_server_demo`, `process_viz_demo`,
+`snake_demo`) if you'd rather build and serve just one — see the walkthroughs
+below, starting with the counter demo.
 
 ## Creating a new Concrete app
 

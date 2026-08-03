@@ -76,6 +76,44 @@ function termToString(t) {
   }
 }
 
+// Decode the type-tagged wire format (see concrete_serializer.erl) back
+// into a boxed term. Used by sse:connect/3 to turn a server-pushed JSON
+// event straight into something compiled Erlang can pattern-match on,
+// without pulling in client.js (whose Client.deserialize does the same
+// thing for page hydration).
+function base64ToLatin1(b64) {
+  if (typeof atob !== "undefined") return atob(b64);
+  return Buffer.from(b64, "base64").toString("latin1");
+}
+function wireToTerm(node) {
+  switch (node.type) {
+    case "atom":      return Type.atom(node.value);
+    case "integer":   return Type.integer(node.value);
+    case "float":     return Type.float(node.value);
+    case "bitstring": return Type.bitstring(base64ToLatin1(node.value));
+    case "tuple":     return Type.tuple(node.data.map(wireToTerm));
+    case "list":      return Type.list(node.data.map(wireToTerm));
+    case "map":
+      return Type.map(node.data.map(([k, v]) => [wireToTerm(k), wireToTerm(v)]));
+    default:
+      throw new Error(`cannot deserialize wire type: ${node.type}`);
+  }
+}
+
+// The inverse direction, one level deep: a boxed term -> a plain JS
+// value suitable for JSON.stringify. Used by http:post_json/2, whose
+// params are a flat map of scalars (atom/integer/float/bitstring) --
+// deep structures fall back to Erlang-style text via termToString.
+function termToPlainJs(t) {
+  switch (t.type) {
+    case "atom":      return t.value;
+    case "integer":
+    case "float":     return t.value;
+    case "bitstring": return t.value;
+    default:          return termToString(t);
+  }
+}
+
 // Registry of all compiled modules: modules["hello"]["greet/1"] = fn
 const modules = {};
 
@@ -753,9 +791,26 @@ const Erlang = {
     return Type.atom("ok");
   },
   // dom:on_keydown(ElementId, KeyName, Module, Function) — call
-  // Module:Function/0 when KeyName (e.g. "Enter") is pressed in ElementId.
+  // Module:Function/0 when KeyName (e.g. "Enter") is pressed while
+  // ElementId has focus.
   "dom:on_keydown/4": (id, keyName, mod, fn) => {
     document.getElementById(id.value).addEventListener("keydown", (e) => {
+      if (e.key === keyName.value) {
+        e.preventDefault();
+        Interpreter.callTopLevel(mod.value, fn.value, 0, []);
+      }
+    });
+    return Type.atom("ok");
+  },
+  // dom:on_keydown_global(KeyName, Module, Function) — same as
+  // dom:on_keydown/4, but listens on the whole document instead of one
+  // element, so it fires no matter what has focus (or whether anything
+  // does) -- the usual shape for game/global keyboard shortcuts, where
+  // relying on a specific element's focus (e.g. a <canvas>, which
+  // browsers don't focus reliably even with tabindex/autofocus) isn't
+  // good enough.
+  "dom:on_keydown_global/3": (keyName, mod, fn) => {
+    document.addEventListener("keydown", (e) => {
       if (e.key === keyName.value) {
         e.preventDefault();
         Interpreter.callTopLevel(mod.value, fn.value, 0, []);
@@ -777,6 +832,33 @@ const Erlang = {
   // dom:local_storage_remove(Key) — delete a localStorage key.
   "dom:local_storage_remove/1": (key) => {
     window.localStorage.removeItem(key.value);
+    return Type.atom("ok");
+  },
+  // --- network: SSE subscriptions and one-shot HTTP calls ---
+  // sse:connect(Path, Module, Function) — open a server-sent-events
+  // stream and call Module:Function/1 with each event's payload,
+  // decoded from the type-tagged wire format straight into a term (see
+  // wireToTerm). Each call is its own cold top-level entry point, same
+  // as a dom:on_click handler.
+  "sse:connect/3": (path, mod, fn) => {
+    const source = new EventSource(path.value);
+    source.onmessage = (e) => {
+      const term = wireToTerm(JSON.parse(e.data));
+      Interpreter.callTopLevel(mod.value, fn.value, 1, [term]);
+    };
+    return Type.atom("ok");
+  },
+  // http:post_json(Path, ParamsMap) — fire-and-forget JSON POST; the
+  // response (if any) is ignored. ParamsMap is a flat map of scalars,
+  // converted to a plain JS object (see termToPlainJs) and JSON-encoded.
+  "http:post_json/2": (path, paramsMap) => {
+    const obj = {};
+    for (const [k, v] of paramsMap.data) obj[termToPlainJs(k)] = termToPlainJs(v);
+    fetch(path.value, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(obj),
+    });
     return Type.atom("ok");
   },
   // --- math ---

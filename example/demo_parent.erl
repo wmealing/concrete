@@ -33,7 +33,10 @@ demos() ->
      #{id => process_viz, title => <<"Process Ring (spawn/self/send/receive)">>, port => 8770,
        module => process_viz_demo,
        desc => <<"Six spawned worker processes passing a token around a ring, with a live "
-                 "canvas visualization of every send/receive hop.">>}
+                 "canvas visualization of every send/receive hop.">>},
+     #{id => snake, title => <<"Multiplayer Snake">>, port => 8771, module => snake_demo,
+       desc => <<"A real gen_server owns the board and broadcasts it over SSE to every "
+                 "connected browser -- open it in two tabs and watch both snakes move live.">>}
     ].
 
 %% Build + start every demo's own cowboy listener, then serve the
