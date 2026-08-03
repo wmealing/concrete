@@ -3,27 +3,25 @@
 <head>
   <meta charset="UTF-8">
   <title>Concrete -- todo list</title>
+  <link rel="stylesheet" href="/theme.css">
   <style>
-    body { font-family: sans-serif; margin: 2rem; color: #222; }
-    #todo-root { max-width: 28rem; border: 2px solid #444; border-radius: 8px;
-                 padding: 1rem 1.5rem; }
     #todo-form { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
-    #new-todo { flex: 1; font-size: 1rem; padding: 0.4rem; }
+    #new-todo { flex: 1; }
     #todo-list { list-style: none; padding: 0; margin: 0 0 1rem 0; }
     .todo-item { display: flex; align-items: center; gap: 0.5rem;
-                 padding: 0.3rem 0; border-bottom: 1px solid #eee; }
-    .todo-item.done span { text-decoration: line-through; color: #999; }
+                 padding: 0.3rem 0; border-bottom: 1px solid var(--border); }
+    .todo-item.done span { text-decoration: line-through; color: var(--text-mute); }
     .todo-item span { flex: 1; }
-    .todo-item button { color: #a00; }
-    .empty { color: #999; font-style: italic; padding: 0.5rem 0; }
+    .todo-item button { color: var(--danger); }
+    .empty { color: var(--text-mute); font-style: italic; padding: 0.5rem 0; }
     #todo-footer { display: flex; justify-content: space-between;
-                   align-items: center; font-size: 0.9rem; color: #666; }
+                   align-items: center; font-size: 0.9rem; color: var(--text-dim); }
   </style>
 </head>
 <body>
+  <a class="back-link" href="http://localhost:8760/">&larr; All demos</a>
 
-  <p><a href="http://localhost:8760/">&larr; All demos</a></p>
-  <div id="todo-root">
+  <div id="todo-root" class="panel">
     <div id="todo-form">
       <input id="new-todo" type="text" placeholder="What needs doing?">
       <button data-action="add">Add</button>
