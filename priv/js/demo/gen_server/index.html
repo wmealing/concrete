@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Concrete — gen_server demo</title>
+  <link rel="stylesheet" href="/theme.css">
+  <style>
+    #gs-count { font-size: 3em; text-align: center; margin: 0.5em 0; color: #fff; }
+  </style>
+</head>
+<body>
+  <a class="back-link" href="http://localhost:8760/">&larr; All demos</a>
+  <p>A real Erlang <code>spawn</code>/<code>self</code>/<code>!</code>/<code>receive</code>
+     gen_server loop (<code>concrete_gen_server.erl</code>), compiled to JS, running a
+     spawned process dispatching into a callback module
+     (<code>counter_server.erl</code>) — no server round-trips.</p>
+
+  <div id="gs-root" class="panel">
+    <div id="gs-count">0</div>
+    <button data-action="decrement">-1</button>
+    <button data-action="increment">+1</button>
+    <button data-action="get">get</button>
+    <button data-action="reset">reset (cast)</button>
+  </div>
+  <div id="gs-log" class="log"></div>
+
+  <script src="/runtime.js"></script>
+  <script src="/gen_server/concrete_gen_server.js"></script>
+  <script src="/gen_server/counter_server.js"></script>
+  <script src="/gen_server/counter_ui.js"></script>
+  <script src="/gen_server/gen_server_boot.js"></script>
+</body>
+</html>
