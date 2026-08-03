@@ -61,11 +61,23 @@ init([]) ->
 handle_call({join, PlayerId, Pid}, _From, State) ->
     _Ref = erlang:monitor(process, Pid),
     #{players := Players, next_hue := Hue} = State,
-    Player = #{color => Hue, body => new_body(Players), dir => right,
-               pending => right, alive => true, respawn_at => undefined, pid => Pid},
-    State2 = State#{players := Players#{PlayerId => Player},
-                     next_hue := (Hue + 67) rem 360},
-    {reply, ok, State2};
+    case maps:find(PlayerId, Players) of
+        {ok, Existing} ->
+            %% A reconnect (EventSource retries automatically on any
+            %% connection hiccup -- laptop sleep, a network blip, a
+            %% browser tab juggling several open streams -- with the
+            %% *same* player id) must not respawn an already-playing
+            %% snake from scratch. Just point this player's record at
+            %% the new connection's pid; body/alive/etc. carry over.
+            State2 = State#{players := Players#{PlayerId := Existing#{pid := Pid}}},
+            {reply, ok, State2};
+        error ->
+            Player = #{color => Hue, body => new_body(Players), dir => right,
+                       pending => right, alive => true, respawn_at => undefined, pid => Pid},
+            State2 = State#{players := Players#{PlayerId => Player},
+                             next_hue := (Hue + 67) rem 360},
+            {reply, ok, State2}
+    end;
 handle_call(board, _From, State) ->
     {reply, board_term(State), State}.
 
