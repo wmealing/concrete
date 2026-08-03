@@ -95,6 +95,17 @@ transform_expr({call, _, {atom, _, F}, Args}, Ctx) ->
     #ir_local_call{name  = F,
                    arity = length(Args),
                    args  = [transform_expr(A, Ctx) || A <- Args]};
+%% Dynamic dispatch: Module:Function(Args) where the module and/or
+%% function name is a runtime expression (e.g. a variable holding a
+%% callback module atom), not a literal atom pair. Used by gen_server
+%% -style generic loops calling back into a callback module. Always
+%% treated as non-blocking by the encoder's blocking-set analysis (its
+%% target isn't statically known) -- see concrete_encoder.
+transform_expr({call, _, {remote, _, ModExpr, FunExpr}, Args}, Ctx) ->
+    #ir_dynamic_call{module   = transform_expr(ModExpr, Ctx),
+                     function = transform_expr(FunExpr, Ctx),
+                     arity    = length(Args),
+                     args     = [transform_expr(A, Ctx) || A <- Args]};
 transform_expr({call, _, FunExpr, Args}, Ctx) ->
     #ir_anon_call{function = transform_expr(FunExpr, Ctx),
                   args     = [transform_expr(A, Ctx) || A <- Args]};

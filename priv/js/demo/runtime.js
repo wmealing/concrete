@@ -11,6 +11,7 @@ const Type = {
   list:      (data)     => ({ type: "list",      data, tail: null }),
   map:       (pairs)    => ({ type: "map",        data: pairs }),
   pid:       (value)    => ({ type: "pid",        value }),
+  ref:       (value)    => ({ type: "ref",        value }),
   anonFun:   (arity, callable) => ({ type: "anon_fun", arity, callable }),
 };
 
@@ -35,6 +36,7 @@ function termEqual(a, b) {
     case "float":
     case "bitstring":
     case "pid":
+    case "ref":
       return a.value === b.value;
     case "tuple":
       return a.data.length === b.data.length &&
@@ -61,6 +63,7 @@ function termToString(t) {
     case "float":     return String(t.value);
     case "bitstring": return `<<"${t.value}">>`;
     case "pid":       return `<${t.value}>`;
+    case "ref":       return `#Ref<${t.value}>`;
     case "tuple":
       return `{${t.data.map(termToString).join(", ")}}`;
     case "list":
@@ -76,6 +79,34 @@ function termToString(t) {
 // Registry of all compiled modules: modules["hello"]["greet/1"] = fn
 const modules = {};
 
+// Process table for spawn/self/!/receive: pid -> {mailbox, gen, done, result}.
+// See distributed-wiggling-flame plan for the generator-based process
+// model. Everything here runs cooperatively on the one JS thread: `!`
+// (send) synchronously steps its target right away, so a gen_server
+// -style call's reply is normally already sitting in the caller's
+// mailbox by the time it reaches its own receive.
+const processes = {};
+let nextPidId = 1;
+let nextRefId = 1;
+// Pids currently mid-step somewhere on the active JS call stack. A send
+// that would resume one of these (e.g. A sends to B, B replies to A
+// while A itself is still mid-flight further up the stack) must not
+// call .next() on it again -- JS throws on a reentrant generator step,
+// and it's unnecessary anyway: the still-running process will see the
+// newly queued message the moment it reaches its own next receive
+// check, later in this same call stack.
+const activeSteps = new Set();
+let uiPid = null;
+
+// 2D contexts for <canvas> elements, cached by element id.
+const canvasContexts = {};
+function canvasCtx(id) {
+  if (!canvasContexts[id]) {
+    canvasContexts[id] = document.getElementById(id).getContext("2d");
+  }
+  return canvasContexts[id];
+}
+
 // bitstring value <-> byte helpers (latin1 semantics: charCode == byte)
 function bitsToBytes(str) {
   const bytes = new Uint8Array(str.length);
@@ -89,6 +120,136 @@ function bytesToBits(bytes) {
 const Interpreter = {
   isEqual:        (a, b) => termEqual(a, b),
   isStrictlyEqual:(a, b) => termEqual(a, b),
+
+  // The pid currently "running" -- valid only while stepping a
+  // process's generator (see stepProcess/callTopLevel). self/0 reads
+  // this; it's saved/restored around every step since sends recurse
+  // (a clause body's `!` synchronously steps its target inline).
+  currentPid: null,
+
+  newPid() { return nextPidId++; },
+  newRef()  { return nextRefId++; },
+
+  // spawn/1: run the fun until it first blocks or finishes, return its
+  // pid either way (matches real Erlang: spawn returns immediately;
+  // the spawned computation keeps running/blocking independently).
+  spawnProcess(fun) {
+    const pid = Interpreter.newPid();
+    processes[pid] = { mailbox: [], gen: null, done: false, result: null };
+    const prev = Interpreter.currentPid;
+    Interpreter.currentPid = pid;
+    let result;
+    try {
+      result = fun.callable([]);
+    } finally {
+      Interpreter.currentPid = prev;
+    }
+    if (result && typeof result.next === "function") {
+      processes[pid].gen = result;
+      Interpreter.stepProcess(pid);
+    } else {
+      // a non-blocking spawned fun just runs to completion immediately
+      processes[pid].done = true;
+      processes[pid].result = result;
+    }
+    return Type.pid(pid);
+  },
+
+  // Advance a process's generator by exactly one step (i.e. until it
+  // next blocks on an unmatched receive, or finishes).
+  stepProcess(pid) {
+    const proc = processes[pid];
+    if (!proc || proc.done || !proc.gen || activeSteps.has(pid)) return;
+    activeSteps.add(pid);
+    const prev = Interpreter.currentPid;
+    Interpreter.currentPid = pid;
+    let r;
+    try {
+      r = proc.gen.next();
+    } finally {
+      Interpreter.currentPid = prev;
+      activeSteps.delete(pid);
+    }
+    if (r.done) {
+      proc.done = true;
+      proc.result = r.value;
+    }
+  },
+
+  // `!` (send): queue the message and immediately try to make progress
+  // on the target. Sending to an unknown/dead pid is a silent no-op,
+  // matching real Erlang.
+  send(pid, msg) {
+    const proc = processes[pid];
+    if (!proc || proc.done) return;
+    proc.mailbox.push(msg);
+    Interpreter.stepProcess(pid);
+  },
+
+  // Scan a process's mailbox in arrival order; the first message
+  // matching *any* clause wins (real Erlang receive semantics -- not
+  // "first clause across the whole mailbox"). clauses is
+  // [[patFn, guardFn], ...]; patFn/guardFn are the exact codegen used
+  // for case/function clauses (receive has one pattern per clause, so
+  // patFn is invoked the same way: patFn([message])).
+  receiveMatch(pid, clauses) {
+    const proc = processes[pid];
+    if (!proc) return null;
+    const mailbox = proc.mailbox;
+    for (let i = 0; i < mailbox.length; i++) {
+      for (let c = 0; c < clauses.length; c++) {
+        const [patFn, guardFn] = clauses[c];
+        const bindings = patFn([mailbox[i]]);
+        if (bindings !== null && guardFn(bindings)) {
+          mailbox.splice(i, 1);
+          return { clauseIndex: c, bindings };
+        }
+      }
+    }
+    return null;
+  },
+
+  // The only cold entry point: called from real async browser/JS
+  // events (dom:on_click, dom:on_keydown, dom:set_timeout, boot
+  // scripts) that have no ambient process context. If the target turns
+  // out to be blocking, wraps it in an ephemeral process and drives it
+  // once; a compiled call site that already knows its target is
+  // blocking uses `yield* Interpreter.call(...)` instead and must
+  // never come through here.
+  callTopLevel(moduleName, funcName, arity, args) {
+    const result = Interpreter.call(moduleName, funcName, arity, args);
+    if (result && typeof result.next === "function") {
+      return Interpreter.runEphemeral(result);
+    }
+    return result;
+  },
+
+  // Shared by callTopLevel and the auto-registered cross-module BIF
+  // wrapper (defineErlangFunction): wrap an already-created generator
+  // -- from calling into a blocking compiled function outside of any
+  // process context -- in a fresh, throwaway process and drive it to
+  // completion. Correct because self()/receive inside it only ever
+  // need *some* pid to exist for the duration of this call (e.g.
+  // gen_server-style call/2 embeds self() as the reply address).
+  runEphemeral(gen) {
+    const pid = Interpreter.newPid();
+    processes[pid] = { mailbox: [], gen, done: false, result: null };
+    Interpreter.stepProcess(pid);
+    const proc = processes[pid];
+    if (!proc.done) {
+      throw new Error(
+        "process blocked waiting for a message that never arrived " +
+        "(unsupported outside a running process in v1)");
+    }
+    return proc.result;
+  },
+
+  // Module:Function(Args) dynamic dispatch -- module/function are
+  // runtime atom terms, not literals the encoder could resolve
+  // statically (see ir_dynamic_call). Always treated as non-blocking.
+  callDynamic(modTerm, funTerm, arity, args) {
+    return Interpreter.call(modTerm.value, funTerm.value, arity, args);
+  },
 
   // Guards and conditions: accepts JS booleans and 'true'/'false' atoms.
   isTrue(x) {
@@ -118,10 +279,28 @@ const Interpreter = {
   },
 
   // Called by generated module bundles to register compiled functions.
+  // Also registers under the module-prefixed key in the Erlang BIF
+  // table, so a *different* compiled module can reach this one through
+  // an ordinary ir_remote_call (`Erlang["mod:fn/N"]`) exactly like a
+  // hand-written BIF -- each module is compiled independently, with no
+  // visibility into any other module, so there's no separate "user
+  // module call" code path in the encoder. If the call turns out to be
+  // blocking, auto-resolve it as an ephemeral process (mirrors
+  // Interpreter.callTopLevel): the calling module's own blocking
+  // classification has no way to know some *other* module's function
+  // blocks, so it can't have emitted a `yield*` for it.
   defineErlangFunction(moduleName, funcName, arity, clauses) {
     if (!modules[moduleName]) modules[moduleName] = {};
     const key = `${funcName}/${arity}`;
-    modules[moduleName][key] = (args) => Interpreter.callClauses(args, clauses);
+    const impl = (args) => Interpreter.callClauses(args, clauses);
+    modules[moduleName][key] = impl;
+    Erlang[`${moduleName}:${key}`] = (...args) => {
+      const result = impl(args);
+      if (result && typeof result.next === "function") {
+        return Interpreter.runEphemeral(result);
+      }
+      return result;
+    };
   },
 
   // Local call: Interpreter.call(currentModule, "funcName", arity, args)
@@ -214,6 +393,36 @@ const Interpreter = {
       throw e;
     } finally {
       if (afterFn) afterFn();
+    }
+  },
+
+  // Generator counterpart of tryCatch, used when the encoder has
+  // determined body/of/catch/after must uniformly compile as
+  // generators (see concrete_encoder's try/catch blocking analysis).
+  // bodyFn/afterFn are zero-arg closures returning a Generator;
+  // ofClauses/catchClauses entries have generator-returning bodyFns.
+  *tryCatchGen(bodyFn, ofClauses, catchClauses, afterFn) {
+    try {
+      const value = yield* bodyFn();
+      return ofClauses ? yield* Interpreter.matchClauses(value, ofClauses) : value;
+    } catch (e) {
+      const ex = e instanceof ErlangError
+        ? e
+        : new ErlangError("error",
+            Type.tuple([Type.atom("js_error"),
+                        Type.bitstring(String(e && e.message))]));
+      if (catchClauses) {
+        const args = [Type.atom(ex.erlangClass), ex.reason];
+        for (const [patFn, guardFn, bodyFn2] of catchClauses) {
+          const bindings = patFn(args);
+          if (bindings !== null && guardFn(bindings)) {
+            return yield* bodyFn2(bindings);
+          }
+        }
+      }
+      throw e;
+    } finally {
+      if (afterFn) yield* afterFn();
     }
   },
 
@@ -371,6 +580,17 @@ const Erlang = {
   "tl/1":           (l) => Type.list(l.data.slice(1)),
   "element/2":      (n, t) => t.data[n.value - 1],
   "abs/1":          (n) => (n.type === "float" ? Type.float : Type.integer)(Math.abs(n.value)),
+  "trunc/1":        (n) => Type.integer(Math.trunc(n.value)),
+  "round/1":        (n) => Type.integer(Math.round(n.value)),
+  "float/1":        (n) => Type.float(n.value),
+
+  // Processes: spawn/self/make_ref/send. See Interpreter.spawnProcess
+  // et al. `!` is parsed as a plain binop (concrete_transformer) and
+  // falls through the encoder's generic binop case to this key.
+  "self/0":     () => Type.pid(Interpreter.currentPid),
+  "spawn/1":    (fun) => Interpreter.spawnProcess(fun),
+  "make_ref/0": () => Type.ref(Interpreter.newRef()),
+  "!/2":        (pidTerm, msg) => { Interpreter.send(pidTerm.value, msg); return msg; },
 
   // Exceptions.
   "throw/1": (t)     => Interpreter.raise("throw", t),
@@ -425,6 +645,37 @@ const Erlang = {
     return Type.list(out);
   },
   "lists:member/2": (x, l) => boolAtom(l.data.some((e) => termEqual(e, x))),
+  // Generator counterparts, used only when the encoder statically sees
+  // a blocking literal fun passed to one of these five (see
+  // concrete_encoder:higher_order_bif/2). The plain versions above are
+  // untouched and stay the default for the (overwhelmingly common)
+  // non-blocking case.
+  *genListsMap(f, l) {
+    const out = [];
+    for (const x of l.data) out.push(yield* Interpreter.callAnon(f, [x]));
+    return Type.list(out);
+  },
+  *genListsFilter(f, l) {
+    const out = [];
+    for (const x of l.data) {
+      if (Interpreter.isTrue(yield* Interpreter.callAnon(f, [x]))) out.push(x);
+    }
+    return Type.list(out);
+  },
+  *genListsFoldl(f, acc0, l) {
+    let acc = acc0;
+    for (const x of l.data) acc = yield* Interpreter.callAnon(f, [x, acc]);
+    return acc;
+  },
+  *genListsForeach(f, l) {
+    for (const x of l.data) yield* Interpreter.callAnon(f, [x]);
+    return Type.atom("ok");
+  },
+  *genMapsFold(f, acc0, m) {
+    let acc = acc0;
+    for (const [k, v] of m.data) acc = yield* Interpreter.callAnon(f, [k, v, acc]);
+    return acc;
+  },
   "lists:sum/1": (l) =>
     l.data.reduce((acc, x) => Erlang["+/2"](acc, x), Type.integer(0)),
   "lists:nth/2": (n, l) => l.data[n.value - 1],
@@ -462,7 +713,7 @@ const Erlang = {
   // dom:set_timeout(Ms, Module, Function, Args) — schedule an Erlang call.
   "dom:set_timeout/4": (ms, mod, fn, args) => {
     setTimeout(
-      () => Interpreter.call(mod.value, fn.value, args.data.length, args.data),
+      () => Interpreter.callTopLevel(mod.value, fn.value, args.data.length, args.data),
       ms.value
     );
     return Type.atom("ok");
@@ -470,6 +721,13 @@ const Erlang = {
   // dom:set_html(ElementId, Html) — replace an element's innerHTML.
   "dom:set_html/2": (id, html) => {
     document.getElementById(id.value).innerHTML = html.value;
+    return Type.atom("ok");
+  },
+  // dom:scroll_to_bottom(ElementId) — scroll a scrollable container (e.g.
+  // a log panel) to its bottom, so the most recent content stays visible.
+  "dom:scroll_to_bottom/1": (id) => {
+    const el = document.getElementById(id.value);
+    el.scrollTop = el.scrollHeight;
     return Type.atom("ok");
   },
   // dom:get_value(ElementId) — read an <input>/<textarea> element's value.
@@ -488,7 +746,7 @@ const Erlang = {
       const el = e.target.closest(`[${attrName.value}]`);
       if (el) {
         e.preventDefault();
-        Interpreter.call(mod.value, fn.value, 1,
+        Interpreter.callTopLevel(mod.value, fn.value, 1,
           [Type.bitstring(el.getAttribute(attrName.value))]);
       }
     });
@@ -500,7 +758,7 @@ const Erlang = {
     document.getElementById(id.value).addEventListener("keydown", (e) => {
       if (e.key === keyName.value) {
         e.preventDefault();
-        Interpreter.call(mod.value, fn.value, 0, []);
+        Interpreter.callTopLevel(mod.value, fn.value, 0, []);
       }
     });
     return Type.atom("ok");
@@ -521,6 +779,83 @@ const Erlang = {
     window.localStorage.removeItem(key.value);
     return Type.atom("ok");
   },
+  // --- math ---
+  "math:pi/0":  () => Type.float(Math.PI),
+  "math:sin/1": (x) => Type.float(Math.sin(x.value)),
+  "math:cos/1": (x) => Type.float(Math.cos(x.value)),
+  "math:sqrt/1": (x) => Type.float(Math.sqrt(x.value)),
+
+  // --- canvas module: 2D canvas drawing exposed as BIFs. Each BIF takes
+  // an ElementId (bitstring) identifying a <canvas> element as its first
+  // argument; the 2D context is looked up (and cached) by that id.
+  "canvas:clear/1": (id) => {
+    const ctx = canvasCtx(id.value);
+    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    return Type.atom("ok");
+  },
+  "canvas:width/1": (id) => Type.integer(canvasCtx(id.value).canvas.width),
+  "canvas:height/1": (id) => Type.integer(canvasCtx(id.value).canvas.height),
+  "canvas:begin_path/1": (id) => {
+    canvasCtx(id.value).beginPath();
+    return Type.atom("ok");
+  },
+  "canvas:move_to/3": (id, x, y) => {
+    canvasCtx(id.value).moveTo(x.value, y.value);
+    return Type.atom("ok");
+  },
+  "canvas:line_to/3": (id, x, y) => {
+    canvasCtx(id.value).lineTo(x.value, y.value);
+    return Type.atom("ok");
+  },
+  "canvas:arc/6": (id, x, y, r, startAngle, endAngle) => {
+    canvasCtx(id.value).arc(x.value, y.value, r.value, startAngle.value, endAngle.value);
+    return Type.atom("ok");
+  },
+  "canvas:stroke/1": (id) => {
+    canvasCtx(id.value).stroke();
+    return Type.atom("ok");
+  },
+  "canvas:fill/1": (id) => {
+    canvasCtx(id.value).fill();
+    return Type.atom("ok");
+  },
+  "canvas:set_line_width/2": (id, w) => {
+    canvasCtx(id.value).lineWidth = w.value;
+    return Type.atom("ok");
+  },
+  "canvas:set_global_alpha/2": (id, a) => {
+    canvasCtx(id.value).globalAlpha = a.value;
+    return Type.atom("ok");
+  },
+  // canvas:set_stroke_hsl(Id, Hue, Saturation, Lightness) — Hue in
+  // degrees (0-360), Saturation/Lightness as percentages (0-100).
+  "canvas:set_stroke_hsl/4": (id, h, s, l) => {
+    canvasCtx(id.value).strokeStyle = `hsl(${h.value}, ${s.value}%, ${l.value}%)`;
+    return Type.atom("ok");
+  },
+  "canvas:set_fill_hsl/4": (id, h, s, l) => {
+    canvasCtx(id.value).fillStyle = `hsl(${h.value}, ${s.value}%, ${l.value}%)`;
+    return Type.atom("ok");
+  },
+  // canvas:set_fill_rgba(Id, R, G, B, Alpha) — used for translucent trail
+  // fades, since set_fill_hsl has no alpha channel of its own.
+  "canvas:set_fill_rgba/5": (id, r, g, b, a) => {
+    canvasCtx(id.value).fillStyle = `rgba(${r.value}, ${g.value}, ${b.value}, ${a.value})`;
+    return Type.atom("ok");
+  },
+  "canvas:fill_rect/5": (id, x, y, w, h) => {
+    canvasCtx(id.value).fillRect(x.value, y.value, w.value, h.value);
+    return Type.atom("ok");
+  },
+
+  // --- ui module: a tiny demo-only global slot for holding a pid
+  // across separate cold top-level calls (one dom:on_click dispatch
+  // per click has no shared JS closure state) -- this runtime has no
+  // process registry (register/whereis) yet, so the gen_server demo
+  // needs *some* place to remember the spawned server's pid.
+  "ui:set_pid/1": (pid) => { uiPid = pid; return Type.atom("ok"); },
+  "ui:get_pid/0": () => uiPid,
+
   "maps:get/2": (key, map) => {
     const pair = map.data.find(([k]) => termEqual(k, key));
     if (!pair) throw new Error(`maps:get — key not found: ${termToString(key)}`);

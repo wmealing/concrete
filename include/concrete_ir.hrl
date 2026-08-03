@@ -31,6 +31,10 @@
 %% Function calls
 -record(ir_local_call,  {name :: atom(), arity :: non_neg_integer(), args :: list()}).
 -record(ir_remote_call, {module, function, arity :: non_neg_integer(), args :: list()}).
+%% Dynamic dispatch: Module:Function(Args) where module and/or function
+%% are runtime expressions, not literal atoms (e.g. gen_server-style
+%% callback dispatch). See concrete_transformer/concrete_encoder.
+-record(ir_dynamic_call,{module, function, arity :: non_neg_integer(), args :: list()}).
 -record(ir_anon_call,   {function, args :: list()}).
 -record(ir_anon_fun,    {clauses :: list(), arity :: non_neg_integer()}).
 -record(ir_fun_ref,     {module, function :: atom(), arity :: non_neg_integer()}).
@@ -62,7 +66,7 @@
     #ir_nil{} | #ir_tuple{} | #ir_list{} | #ir_map{} | #ir_map_update{} |
     #ir_variable{} | #ir_match{} | #ir_wildcard{} |
     #ir_module{} | #ir_function_def{} | #ir_clause{} |
-    #ir_local_call{} | #ir_remote_call{} | #ir_anon_call{} |
+    #ir_local_call{} | #ir_remote_call{} | #ir_dynamic_call{} | #ir_anon_call{} |
     #ir_anon_fun{} | #ir_fun_ref{} |
     #ir_block{} | #ir_case{} | #ir_if{} | #ir_receive{} | #ir_try{} |
     #ir_lc{} | #ir_bc{} |

@@ -37,7 +37,8 @@
     encode_lc/1,
     encode_try/1,
     encode_bitstring_build/1,
-    encode_receive_is_error/1,
+    encode_receive_after_is_error/1,
+    encode_receive_smoke/1,
     encode_bc_is_error/1,
     encode_dynamic_bs_size_is_error/1,
     encode_plain_module_names/1
@@ -62,7 +63,7 @@ groups() ->
         encode_if, encode_match, encode_map_update,
         encode_anon_fun, encode_fun_ref, encode_lc, encode_try,
         encode_bitstring_build,
-        encode_receive_is_error, encode_bc_is_error,
+        encode_receive_after_is_error, encode_receive_smoke, encode_bc_is_error,
         encode_dynamic_bs_size_is_error,
         encode_plain_module_names
     ]}].
@@ -283,10 +284,26 @@ encode_bitstring_build(_Config) ->
     true = binary:match(JS, <<"Interpreter.buildBitstring(">>) =/= nomatch,
     true = binary:match(JS, <<"t: \"integer\", size: 8, little: false">>) =/= nomatch.
 
-encode_receive_is_error(_Config) ->
-    IR = #ir_receive{clauses = [], after_expr = nil, after_body = nil},
-    {'EXIT', {{receive_not_supported_in_client_code, _}, _}} =
+%% receive itself is supported now (see process_SUITE for execution
+%% tests); only receive...after (timeouts) remains unsupported in v1.
+encode_receive_after_is_error(_Config) ->
+    IR = #ir_receive{clauses = [], after_expr = #ir_integer{value = 100},
+                     after_body = [#ir_atom{value = ok}]},
+    {'EXIT', {{receive_after_not_supported_in_client_code, _}, _}} =
         (catch concrete_encoder:encode_ir(IR)),
+    ok.
+
+encode_receive_smoke(_Config) ->
+    %% A bare receive compiles to a yield*-delegated generator IIFE
+    %% that calls Interpreter.receiveMatch; full behavioral coverage
+    %% (spawn/send/receive round trips) lives in process_SUITE.
+    IR = #ir_receive{
+        clauses = [#ir_clause{patterns = [#ir_atom{value = ping}],
+                              guards = [], body = [#ir_atom{value = pong}]}],
+        after_expr = nil, after_body = nil},
+    JS = js(IR),
+    true = binary:match(JS, <<"Interpreter.receiveMatch">>) =/= nomatch,
+    true = binary:match(JS, <<"yield*">>) =/= nomatch,
     ok.
 
 encode_bc_is_error(_Config) ->
