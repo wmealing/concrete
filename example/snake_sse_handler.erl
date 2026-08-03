@@ -13,15 +13,15 @@
 -export([init/2, info/3]).
 
 init(Req, State) ->
-    PlayerId = cowboy_req:binding(player_id, Req),
-    ok = snake_game:join(PlayerId, self()),
+    Secret = cowboy_req:binding(secret, Req),
+    ok = snake_game:join(Secret, self()),
     concrete_pubsub:subscribe(snake_board, self()),
     Req2 = cowboy_req:stream_reply(200,
         #{<<"content-type">>  => <<"text/event-stream">>,
           <<"cache-control">> => <<"no-cache">>}, Req),
     %% An immediate snapshot so the client can draw before the next tick.
     send_board(Req2, snake_game:board()),
-    {cowboy_loop, Req2, State#{player_id => PlayerId}}.
+    {cowboy_loop, Req2, State#{secret => Secret}}.
 
 info({concrete_event, Board}, Req, State) ->
     send_board(Req, Board),

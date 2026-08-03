@@ -12,9 +12,14 @@
 -define(CANVAS, <<"board">>).
 -define(CELL, 20).
 
-start(PlayerId) ->
-    ui:set_pid(PlayerId),
-    sse:connect(<<"/snake/events/", PlayerId/binary>>, snake_client, on_board),
+%% Secret is this tab's private session credential (see snake_game.erl
+%% and snake_http.erl) -- sse:connect/3 hangs onto it internally and
+%% reconnects with it automatically if the stream drops (see
+%% runtime.js), which is what resumes this same snake instead of
+%% spawning a new one.
+start(Secret) ->
+    ui:set_pid(Secret),
+    sse:connect(<<"/snake/events/", Secret/binary>>, snake_client, on_board),
     %% Global, not scoped to the canvas: browsers don't reliably focus a
     %% <canvas> even with tabindex/autofocus, so a focus-scoped listener
     %% would silently never fire. See dom:on_keydown_global/3.
@@ -30,9 +35,9 @@ key_left()  -> post_direction(<<"left">>).
 key_right() -> post_direction(<<"right">>).
 
 post_direction(Dir) ->
-    PlayerId = ui:get_pid(),
+    Secret = ui:get_pid(),
     http:post_json(<<"/snake/input">>,
-        #{<<"player_id">> => PlayerId, <<"direction">> => Dir}).
+        #{<<"secret">> => Secret, <<"direction">> => Dir}).
 
 %% Called once per board broadcast (see snake_sse_handler.erl), with
 %% Board already deserialized straight into a term matching
@@ -44,11 +49,12 @@ on_board(Board) ->
     lists:foreach(fun draw_player/1, Players),
     dom:set_text(<<"status">>,
         <<(integer_to_binary(alive_count(Players)))/binary,
-          " snake(s) alive -- use the arrow keys">>).
+          " snake(s) alive -- use the arrow keys">>),
+    dom:set_html(<<"legend">>, legend_html(Players)).
 
-draw_player({_Id, _Hue, _Body, false}) ->
+draw_player({_Hue, _Body, false, _LastSeenMs}) ->
     ok;
-draw_player({_Id, Hue, Body, true}) ->
+draw_player({Hue, Body, true, _LastSeenMs}) ->
     lists:foreach(fun(Cell) -> draw_cell(Cell, Hue, 80, 55) end, Body).
 
 draw_food(Cell) ->
@@ -59,4 +65,24 @@ draw_cell({X, Y}, Hue, Sat, Light) ->
     canvas:fill_rect(?CANVAS, X * ?CELL, Y * ?CELL, ?CELL - 1, ?CELL - 1).
 
 alive_count(Players) ->
-    length([ok || {_Id, _Hue, _Body, true} <- Players]).
+    length([ok || {_Hue, _Body, true, _LastSeenMs} <- Players]).
+
+%% One row per currently-connected snake: a color swatch matching what
+%% it's drawn as on the canvas, plus how long ago it last
+%% joined/reconnected (see snake_game.erl's board_term/1).
+legend_html(Players) ->
+    lists:foldl(fun(P, Acc) -> <<Acc/binary, (legend_row(P))/binary>> end, <<>>, Players).
+
+legend_row({Hue, _Body, Alive, LastSeenMs}) ->
+    <<"<div class=\"legend-row\"><span class=\"swatch\" style=\"background:hsl(",
+      (integer_to_binary(Hue))/binary, ",80%,55%)\"></span> ",
+      (status_label(Alive))/binary, " -- last connected ",
+      (ago_text(LastSeenMs))/binary, "</div>">>.
+
+status_label(true)  -> <<"alive">>;
+status_label(false) -> <<"respawning">>.
+
+ago_text(Ms) when Ms < 1000 ->
+    <<"just now">>;
+ago_text(Ms) ->
+    <<(integer_to_binary(Ms div 1000))/binary, "s ago">>.

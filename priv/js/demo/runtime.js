@@ -840,12 +840,29 @@ const Erlang = {
   // decoded from the type-tagged wire format straight into a term (see
   // wireToTerm). Each call is its own cold top-level entry point, same
   // as a dom:on_click handler.
+  //
+  // EventSource retries on its own for a transient drop, but gives up
+  // for good (readyState settles at CLOSED) after some failures --
+  // network sleep/wake, a proxy hiccup, whatever. Path is expected to
+  // carry a stable per-session credential (see snake_http.erl's
+  // Secret for the pattern this exists for), so reconnecting with the
+  // exact same path resumes rather than starting over: watch for that
+  // terminal CLOSED state and open a fresh EventSource ourselves.
   "sse:connect/3": (path, mod, fn) => {
-    const source = new EventSource(path.value);
-    source.onmessage = (e) => {
-      const term = wireToTerm(JSON.parse(e.data));
-      Interpreter.callTopLevel(mod.value, fn.value, 1, [term]);
+    const RETRY_MS = 1000;
+    const open = () => {
+      const source = new EventSource(path.value);
+      source.onmessage = (e) => {
+        const term = wireToTerm(JSON.parse(e.data));
+        Interpreter.callTopLevel(mod.value, fn.value, 1, [term]);
+      };
+      source.onerror = () => {
+        if (source.readyState === EventSource.CLOSED) {
+          setTimeout(open, RETRY_MS);
+        }
+      };
     };
+    open();
     return Type.atom("ok");
   },
   // http:post_json(Path, ParamsMap) — fire-and-forget JSON POST; the

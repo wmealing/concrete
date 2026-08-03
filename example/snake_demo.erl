@@ -34,7 +34,7 @@ serve(Port) ->
         {'_', [
             {"/",                        snake_http,        #{route => page}},
             {"/snake/input",             snake_http,         #{route => input}},
-            {"/snake/events/:player_id", snake_sse_handler,  #{}},
+            {"/snake/events/:secret", snake_sse_handler,  #{}},
             {"/assets/[...]",            cowboy_static,
                 {dir, DemoDir, [{mimetypes, cow_mimetypes, all}]}}
         ]}
