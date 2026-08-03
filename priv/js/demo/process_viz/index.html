@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Concrete — spawn/self/send/receive demo</title>
+  <link rel="stylesheet" href="/theme.css">
+</head>
+<body>
+  <a class="back-link" href="http://localhost:8760/">&larr; All demos</a>
+  <p>Six real Erlang processes (<code>spawn</code>/<code>self</code>/<code>!</code>/<code>receive</code>,
+     compiled to JS) arranged in a ring. <b>Start</b> sends a token that hops
+     from process to process; <b>Poll workers</b> does a synchronous
+     request/reply round trip with every worker.</p>
+
+  <div id="viz-root" style="text-align:center;">
+    <canvas id="ring" width="360" height="360"></canvas>
+    <button data-action="start">Start</button>
+    <button data-action="poll">Poll workers</button>
+  </div>
+  <div id="viz-log" class="log"></div>
+
+  <script src="/runtime.js"></script>
+  <script src="/process_viz/process_viz_app.js"></script>
+  <script src="/process_viz/process_viz_boot.js"></script>
+</body>
+</html>
