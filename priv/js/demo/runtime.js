@@ -962,6 +962,11 @@ const Erlang = {
     return Type.atom("ok");
   },
 
+  // debug:log(Term) — print a term to the browser console from
+  // compiled Erlang, formatted the same way the interpreter would
+  // print it at a shell prompt (see termToString).
+  "debug:log/1": (term) => { console.log(termToString(term)); return Type.atom("ok"); },
+
   // --- ui module: demo-only slots for holding values across separate
   // cold top-level calls (one dom:on_click dispatch per click has no
   // shared JS closure state) -- this runtime has no process registry

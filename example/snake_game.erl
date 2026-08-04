@@ -144,7 +144,7 @@ log_join(reconnect, Secret, Pid) ->
 log_leave(Secret, Pid, Reason) ->
     io:format("[snake_game] ~s left (pid ~p down: ~p)~n", [short(Secret), Pid, Reason]).
 
-short(Secret) -> binary:part(Secret, 0, 8).
+short(Secret) -> binary:part(Secret, 0, min(8, byte_size(Secret))).
 
 %% --- Game loop ---
 

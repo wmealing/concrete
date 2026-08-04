@@ -7,10 +7,12 @@
 %% browser runs this same loop, which is why every tab sees every
 %% player's snake move in lockstep.
 -module(snake_client).
--export([start/1, on_board/1, key_up/0, key_down/0, key_left/0, key_right/0]).
+-export([start/1, on_board/1, key_up/0, key_down/0, key_left/0, key_right/0,
+         heartbeat_tick/1]).
 
 -define(CANVAS, <<"board">>).
 -define(CELL, 20).
+-define(HEARTBEAT_MS, 10000).
 
 %% Secret is this tab's private session credential (see snake_game.erl
 %% and snake_http.erl) -- sse:connect/3 hangs onto it internally and
@@ -30,7 +32,16 @@ start(Secret) ->
     dom:on_keydown_global(<<"ArrowDown">>, snake_client, key_down),
     dom:on_keydown_global(<<"ArrowLeft">>, snake_client, key_left),
     dom:on_keydown_global(<<"ArrowRight">>, snake_client, key_right),
+    %% This tab's half of the heartbeat exchange -- entirely
+    %% independent of the server's own heartbeat down the SSE stream
+    %% (see snake_sse_handler.erl); the two aren't synchronized.
+    dom:set_timeout(?HEARTBEAT_MS, snake_client, heartbeat_tick, [Secret]),
     ok.
+
+heartbeat_tick(Secret) ->
+    debug:log(<<"heartbeat -> server">>),
+    http:post_json(<<"/snake/heartbeat">>, #{<<"secret">> => Secret}),
+    dom:set_timeout(?HEARTBEAT_MS, snake_client, heartbeat_tick, [Secret]).
 
 key_up()    -> post_direction(<<"up">>).
 key_down()  -> post_direction(<<"down">>).
@@ -42,6 +53,12 @@ post_direction(Dir) ->
     http:post_json(<<"/snake/input">>,
         #{<<"secret">> => Secret, <<"direction">> => Dir}).
 
+%% The SSE stream carries two shapes of message: the regular board
+%% broadcast (a map, handled below) and the server's own heartbeat (a
+%% {heartbeat, N} tuple -- see snake_sse_handler.erl), which this just
+%% logs; it isn't otherwise part of the board's rendering.
+on_board({heartbeat, N}) ->
+    debug:log(<<"heartbeat <- server #", (integer_to_binary(N))/binary>>);
 %% Called once per board broadcast (see snake_sse_handler.erl), with
 %% Board already deserialized straight into a term matching
 %% snake_game:board_term/1 (plus a one-off my_color key on the very

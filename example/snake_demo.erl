@@ -34,13 +34,20 @@ serve(Port) ->
         {'_', [
             {"/",                        snake_http,        #{route => page}},
             {"/snake/input",             snake_http,         #{route => input}},
+            {"/snake/heartbeat",         snake_http,         #{route => heartbeat}},
             {"/snake/events/:secret", snake_sse_handler,  #{}},
             {"/assets/[...]",            cowboy_static,
                 {dir, DemoDir, [{mimetypes, cow_mimetypes, all}]}}
         ]}
     ]),
     {ok, _} = cowboy:start_clear(snake_demo_http, [{port, Port}], #{
-        env => #{dispatch => Dispatch}
+        env => #{dispatch => Dispatch},
+        %% The SSE stream is one-directional (server -> browser); cowboy's
+        %% idle_timeout only resets on data *received* from the client, so
+        %% with the default 60000ms this connection would get killed by
+        %% cowboy itself every 60s regardless of the heartbeats flowing
+        %% out over it, and EventSource would silently reconnect.
+        idle_timeout => infinity
     }),
     io:format("~nSnake demo running at http://localhost:~w~n", [Port]).
 

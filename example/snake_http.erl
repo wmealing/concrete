@@ -1,7 +1,9 @@
 %% Plain HTTP handlers for the snake demo: the page (mints a session
-%% secret and joins the game) and the direction-input endpoint. The SSE
-%% stream itself is a separate cowboy_loop handler -- see
-%% snake_sse_handler.
+%% secret and joins the game), the direction-input endpoint, and the
+%% client's half of the heartbeat exchange (see snake_client.erl and
+%% snake_sse_handler.erl for the server's half, sent down the SSE
+%% stream itself). The SSE stream is a separate cowboy_loop handler --
+%% see snake_sse_handler.
 -module(snake_http).
 -behaviour(cowboy_handler).
 
@@ -20,6 +22,13 @@ init(Req, #{route := input} = State) ->
     {ok, Body, Req1} = cowboy_req:read_body(Req),
     {ok, #{<<"secret">> := Secret, <<"direction">> := DirBin}} = thoas:decode(Body),
     ok = snake_game:set_direction(Secret, binary_to_existing_atom(DirBin)),
+    Req2 = cowboy_req:reply(200,
+        #{<<"content-type">> => <<"application/json">>}, <<"{}">>, Req1),
+    {ok, Req2, State};
+init(Req, #{route := heartbeat} = State) ->
+    {ok, Body, Req1} = cowboy_req:read_body(Req),
+    {ok, #{<<"secret">> := Secret}} = thoas:decode(Body),
+    io:format("[snake_http] heartbeat <- ~s~n", [binary:part(Secret, 0, 8)]),
     Req2 = cowboy_req:reply(200,
         #{<<"content-type">> => <<"application/json">>}, <<"{}">>, Req1),
     {ok, Req2, State}.
