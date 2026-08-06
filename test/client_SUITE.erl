@@ -14,7 +14,8 @@
     dispatch_patches_dom_in_place/1,
     embedded_component_renders/1,
     render_with_layout_fills_slot/1,
-    slot_outside_layout_throws/1
+    slot_outside_layout_throws/1,
+    command_button_dispatches_over_http/1
 ]).
 
 all() ->
@@ -28,7 +29,8 @@ groups() ->
      dispatch_patches_dom_in_place,
      embedded_component_renders,
      render_with_layout_fills_slot,
-     slot_outside_layout_throws]}].
+     slot_outside_layout_throws,
+     command_button_dispatches_over_http]}].
 init_per_suite(Config) ->
     case os:find_executable("node") of
         false -> {skip, "node not found on PATH"};
@@ -129,6 +131,52 @@ slot_outside_layout_throws(Config) ->
         "}\n"),
     [_Initial, Result | _] = lines(Out),
     <<"THROW:slot rendered outside a layout context">> = Result.
+
+%% concrete-command is the declarative counterpart to concrete-click,
+%% but for a server round trip: a click POSTs to the same
+%% /concrete/command endpoint concrete_command_handler already serves,
+%% and the response's Server map gets merged into the component's own
+%% state so it shows up through the normal render/1 path. fetch is
+%% stubbed here (no real HTTP call) to check the request Client.js
+%% actually sent and that the response correctly updates the DOM.
+command_button_dispatches_over_http(Config) ->
+    Out = run_client_multi(Config, fixture_command_page, [fixture_command_page], #{},
+        "let capturedRequest = null;\n"
+        "const fetch = (url, options) => {\n"
+        "  capturedRequest = { url, body: JSON.parse(options.body) };\n"
+        "  return Promise.resolve({\n"
+        "    json: () => Promise.resolve({\n"
+        "      state: { type: \"map\",\n"
+        "               data: [[{type: \"atom\", value: \"count\"}, {type: \"integer\", value: 41}]] }\n"
+        "    }),\n"
+        "  });\n"
+        "};\n"
+        "container.listeners[\"click\"]({\n"
+        "  target: {\n"
+        "    closest: (sel) => sel === \"[concrete-command]\"\n"
+        "      ? { getAttribute: () => \"bump\" }\n"
+        "      : null,\n"
+        "  },\n"
+        "  preventDefault() {},\n"
+        "});\n"
+        "setTimeout(() => {\n"
+        "  console.log(JSON.stringify({\n"
+        "    url: capturedRequest.url,\n"
+        "    module: capturedRequest.body.module,\n"
+        "    command: capturedRequest.body.command,\n"
+        "    params: capturedRequest.body.params,\n"
+        "    stateType: capturedRequest.body.state.type,\n"
+        "    html: container.innerHTML,\n"
+        "  }));\n"
+        "}, 0);\n"),
+    [_Initial, ResultJSON | _] = lines(Out),
+    {ok, #{<<"url">> := <<"/concrete/command">>,
+           <<"module">> := <<"fixture_command_page">>,
+           <<"command">> := <<"bump">>,
+           <<"params">> := #{},
+           <<"stateType">> := <<"map">>,
+           <<"html">> := <<"<p>count: 41</p><button concrete-command=\"bump\">+</button>">>}} =
+        thoas:decode(ResultJSON).
 
 %% --- Harness ---
 %% Builds the page bundle exactly like template_demo:bundle_js/1 (BEAM

@@ -3,25 +3,36 @@
 //
 // Boot with Client.init(moduleName, containerId, stateJSON):
 //  - deserializes the server's type-tagged hydration JSON into terms
-//  - installs one delegated click listener on the container; clicks on
-//    any [concrete-click] element dispatch that action
+//  - installs one delegated click listener on the container: clicks on
+//    any [concrete-click] element dispatch that action (client-only,
+//    runs Mod:action/3 in the browser); clicks on any [concrete-command]
+//    element dispatch that command (a server round trip over the
+//    existing /concrete/command endpoint -- see dispatchCommand)
 //  - renders via the compiled render/1 function (same template the
 //    server rendered, so the markup replaces itself identically)
 //
-// Dispatch cycle: action name -> compiled Mod:action/3 -> new component
-// map -> render/1 -> diff against the previous render's vnode tree ->
-// patch only what changed into the real DOM (see "Vnode diffing"
-// below). Client.renderWithLayout (layouts are never part of this
-// reactive loop -- see its own comment) still goes through the older,
-// simpler domToHtml string renderer instead.
+// Action dispatch cycle: action name -> compiled Mod:action/3 -> new
+// component map -> render/1 -> diff against the previous render's
+// vnode tree -> patch only what changed into the real DOM (see "Vnode
+// diffing" below). Client.renderWithLayout (layouts are never part of
+// this reactive loop -- see its own comment) still goes through the
+// older, simpler domToHtml string renderer instead.
+//
+// Command dispatch cycle: command name -> POST {module, command,
+// params, state: <wire-encoded Client.server>} to /concrete/command ->
+// Mod:command/3 runs server-side -> the response's new Server map is
+// merged into the component's own state (so whatever the command
+// changed shows up through the normal render/1 path) -> render/1 runs
+// same as after an action.
 
 const Client = {
   module: null,
   component: null,
   container: null,
   vnodes: null, // the previous render's vnode tree, or null before the first render
+  server: null, // Server map threaded through command round trips (opaque to render/1)
 
-  // --- Wire format (matches concrete_serializer) ---
+  // --- Wire format (matches concrete_serializer / concrete_deserializer) ---
 
   deserialize(node) {
     switch (node.type) {
@@ -44,6 +55,33 @@ const Client = {
     return Buffer.from(b64, "base64").toString("latin1");
   },
 
+  // Inverse of deserialize -- needed here (unlike the server, which
+  // only ever sends wire JSON, never receives it) because a command
+  // round trip has to send Client.server back up wire-encoded, the
+  // same shape concrete_deserializer expects on the other end.
+  serialize(term) {
+    switch (term.type) {
+      case "atom":      return { type: "atom", value: term.value };
+      case "integer":   return { type: "integer", value: term.value };
+      case "float":     return { type: "float", value: term.value };
+      case "bitstring": return { type: "bitstring", value: Client.encodeBase64(term.value) };
+      case "tuple":     return { type: "tuple", data: term.data.map(Client.serialize) };
+      case "list":      return { type: "list", data: term.data.map(Client.serialize), tail: null };
+      case "map":
+        return {
+          type: "map",
+          data: term.data.map(([k, v]) => [Client.serialize(k), Client.serialize(v)]),
+        };
+      default:
+        throw new Error(`cannot serialize term type: ${term.type}`);
+    }
+  },
+
+  encodeBase64(s) {
+    if (typeof btoa !== "undefined") return btoa(s);
+    return Buffer.from(s, "latin1").toString("base64");
+  },
+
   // --- Lifecycle ---
 
   init(moduleName, containerId, stateJSON) {
@@ -51,11 +89,18 @@ const Client = {
     Client.container = document.getElementById(containerId);
     const wire = typeof stateJSON === "string" ? JSON.parse(stateJSON) : stateJSON;
     Client.component = Client.deserialize(wire);
+    Client.server = Type.map([]);
     Client.container.addEventListener("click", (e) => {
-      const el = e.target.closest("[concrete-click]");
-      if (el) {
+      const actionEl = e.target.closest("[concrete-click]");
+      if (actionEl) {
         e.preventDefault();
-        Client.dispatch(el.getAttribute("concrete-click"));
+        Client.dispatch(actionEl.getAttribute("concrete-click"));
+        return;
+      }
+      const commandEl = e.target.closest("[concrete-command]");
+      if (commandEl) {
+        e.preventDefault();
+        Client.dispatchCommand(commandEl.getAttribute("concrete-command"));
       }
     });
     Client.render();
@@ -68,6 +113,42 @@ const Client = {
       Client.component,
     ]);
     Client.render();
+  },
+
+  // Declarative command dispatch: POSTs to the same /concrete/command
+  // endpoint concrete_command_handler already serves, in the same wire
+  // format (module/command/params plain, state wire-encoded) it
+  // already expects -- this is a second way to reach that endpoint,
+  // not a new one. params is a plain object (JSON, not wire-tagged),
+  // matching how concrete_command_handler hands Params straight to
+  // Mod:command/3 with no decode step; a template attribute has no
+  // natural place to declare structured params, so this always sends
+  // {} -- call dispatchCommand directly with real params from compiled
+  // action code for anything that needs them.
+  dispatchCommand(commandName, params) {
+    return fetch("/concrete/command", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        module: Client.module,
+        command: commandName,
+        params: params || {},
+        state: Client.serialize(Client.server),
+      }),
+    })
+      .then((res) => res.json())
+      .then((json) => {
+        Client.server = Client.deserialize(json.state);
+        // The command ran server-side against Server, not Component --
+        // merge whatever it returned into the component's own state so
+        // render/1 (which only ever sees Component) picks it up.
+        const oldState =
+          Interpreter.mapLookup(Client.component, Type.atom("state")) || Type.map([]);
+        const mergedState = Interpreter.mapUpdate(oldState, Client.server.data);
+        Client.component =
+          Interpreter.mapUpdate(Client.component, [[Type.atom("state"), mergedState]]);
+        Client.render();
+      });
   },
 
   render() {

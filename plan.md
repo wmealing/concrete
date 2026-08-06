@@ -86,13 +86,27 @@ originally scoped — see below.
   stub, and `dispatch_patches_dom_in_place` asserts DOM node *identity*
   survives a re-render — the actual point of diffing, not just that the
   resulting HTML is correct.
+- Declarative client-side command dispatch: a `concrete-command="name"`
+  attribute now gets the same automatic delegated dispatch `concrete-click`
+  already had. `Client.init` installs a second `[concrete-command]` check
+  alongside the existing `[concrete-click]` one; a click calls
+  `Client.dispatchCommand`, which POSTs `{module, command, params, state}` to
+  the *same* `/concrete/command` endpoint `concrete_command_handler` already
+  served (params plain JSON, state wire-encoded — identical shape to the
+  existing HTTP command flow, just triggered declaratively instead of by
+  hand-calling `http:post_json/2`). `client.js` gained `Client.serialize/1`
+  (the inverse of `deserialize/1` — needed because a command round trip has
+  to send `Client.server` back up wire-encoded, which nothing before this
+  needed to do client-side) and a `Client.server` field threaded through
+  each round trip. The response's new Server map is merged into the
+  component's own state (`Interpreter.mapUpdate`) so whatever the command
+  changed flows through the normal `render/1` + vnode-diff path, same as an
+  action. Proven in Node (`client_SUITE:command_button_dispatches_over_http`,
+  `fetch` stubbed to check the request shape and the merged re-render,
+  without a live server).
 
 **Known gaps (not yet built):**
-1. **No declarative client-side command dispatch.** `concrete-click` gets
-   automatic action dispatch; there's no equivalent for commands — a
-   component has to hand-call the `http:post_json/2` BIF or open its own
-   WebSocket, as `ws_demo` does. **Next up.**
-2. **No end-to-end integration test.** Phase 7 wants Common Test against a
+1. **No end-to-end integration test.** Phase 7 wants Common Test against a
    real cowboy server with HTTP client assertions; coverage currently stops
    at unit/pipeline tests plus Node.js bundle execution (`js_exec_SUITE`).
 
