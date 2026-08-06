@@ -36,7 +36,12 @@ demos() ->
                  "canvas visualization of every send/receive hop.">>},
      #{id => snake, title => <<"Multiplayer Snake">>, port => 8771, module => snake_demo,
        desc => <<"A real gen_server owns the board and broadcasts it over SSE to every "
-                 "connected browser -- open it in two tabs and watch both snakes move live.">>}
+                 "connected browser -- open it in two tabs and watch both snakes move live.">>},
+     #{id => ws, title => <<"WebSocket Actions &amp; Commands">>, port => 8772, module => ws_demo,
+       desc => <<"Plain JavaScript, no compiled bundle -- every click sends a real "
+                 "action/command message over one WebSocket to concrete_ws_handler, "
+                 "dispatched server-side. The counter is a gen_server, so it survives "
+                 "a reload.">>}
     ].
 
 %% Build + start every demo's own cowboy listener, then serve the

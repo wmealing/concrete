@@ -1,0 +1,8 @@
+<div class="ws-demo">
+  <p>Command count (server-persisted): <strong id="count">{@count}</strong></p>
+  <p>Action echo (doubles whatever the browser last sent): <strong id="echo">{@echo}</strong></p>
+  <button id="bump">+1 via command</button>
+  <button id="double">double via action</button>
+  <h3>Wire messages</h3>
+  <pre id="log"></pre>
+</div>
