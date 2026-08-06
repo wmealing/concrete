@@ -12,7 +12,10 @@
     render_escapes_values/1,
     render_void_element/1,
     render_component/1,
-    render_page_from_file/1
+    render_page_from_file/1,
+    render_wrap_in_layout/1,
+    render_no_layout_passthrough/1,
+    render_slot_outside_layout_errors/1
 ]).
 
 all() ->
@@ -28,7 +31,10 @@ groups() ->
      render_escapes_values,
      render_void_element,
      render_component,
-     render_page_from_file]}].
+     render_page_from_file,
+     render_wrap_in_layout,
+     render_no_layout_passthrough,
+     render_slot_outside_layout_errors]}].
 init_per_suite(Config) ->
     %% fixture_page:template() returns a relative filename; resolve it
     %% against this suite's data dir.
@@ -77,6 +83,26 @@ render_page_from_file(_Config) ->
     %% hydration payload is type-tagged wire JSON of the component map
     {_, _} = binary:match(StateJSON, <<"\"type\":\"map\"">>),
     {_, _} = binary:match(StateJSON, <<"\"value\":\"name\"">>).
+
+render_wrap_in_layout(_Config) ->
+    {HTML, _StateJSON, _Server} = concrete_renderer:render_page(fixture_layout_page, #{}),
+    Wrapped = iolist_to_binary(concrete_renderer:wrap_in_layout(fixture_layout_page, HTML)),
+    <<"<html><head><title>Demo</title></head><body><p>page content</p></body></html>">> =
+        Wrapped.
+
+render_no_layout_passthrough(_Config) ->
+    {HTML, _StateJSON, _Server} = concrete_renderer:render_page(fixture_page, #{}),
+    Bin = iolist_to_binary(HTML),
+    Bin = iolist_to_binary(concrete_renderer:wrap_in_layout(fixture_page, HTML)).
+
+render_slot_outside_layout_errors(_Config) ->
+    Nodes = concrete_template_parser:parse_string("<slot/>"),
+    try
+        concrete_renderer:render_nodes(Nodes, #{state => #{}}),
+        error(should_have_raised)
+    catch
+        error:{render_error, slot_outside_layout} -> ok
+    end.
 
 render(Template, StateMap) ->
     Nodes = concrete_template_parser:parse_string(Template),

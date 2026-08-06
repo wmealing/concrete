@@ -18,6 +18,7 @@
     parse_mixed_content/1,
     parse_component_string_prop/1,
     parse_multiline_template/1,
+    parse_slot_tag/1,
     compile_render_fun_js/1
 ]).
 
@@ -40,6 +41,7 @@ groups() ->
      parse_mixed_content,
      parse_component_string_prop,
      parse_multiline_template,
+     parse_slot_tag,
      compile_render_fun_js]}].
 parse_text_node(_Config) ->
     [{text, <<"hello">>}] = parse("hello").
@@ -103,6 +105,10 @@ parse_multiline_template(_Config) ->
      {text, _},
      {element, <<"button">>, [{<<"concrete-click">>, <<"increment">>}], [{text, <<"+">>}]},
      {text, _}] = Children.
+
+parse_slot_tag(_Config) ->
+    [{element, <<"body">>, [], [slot]}] = parse("<body><slot /></body>"),
+    [slot] = parse("<slot/>").
 
 compile_render_fun_js(_Config) ->
     Nodes  = parse("<p>{@count}</p>"),

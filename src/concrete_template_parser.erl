@@ -7,6 +7,7 @@
 %%                                        it reads from component state
 %%   <button concrete-click="incr">       event attributes pass through
 %%   <:component module={mod} k={v} />    embedded child component
+%%   <slot />                             layout placeholder for page/child content
 %%
 %% `@name` is rewritten to `maps:get(name, CONCRETE_STATE)` before the
 %% expression is parsed with erl_scan/erl_parse. The server renderer and
@@ -25,7 +26,8 @@
     {element, binary(), [attr()], [dom_node()]}
   | {text, binary()}
   | {expr, erl_parse:abstract_expr()}
-  | {component, module(), [{atom(), binary() | {expr, erl_parse:abstract_expr()}}]}.
+  | {component, module(), [{atom(), binary() | {expr, erl_parse:abstract_expr()}}]}
+  | slot.
 
 -type attr() :: {binary(), binary() | {expr, erl_parse:abstract_expr()}}.
 
@@ -54,6 +56,9 @@ parse_nodes("</" ++ _ = Cs, Acc) ->
 parse_nodes("<:component" ++ Cs, Acc) ->
     {Node, Rest} = parse_component(Cs),
     parse_nodes(Rest, [Node | Acc]);
+parse_nodes("<slot" ++ Cs, Acc) when hd(Cs) =:= $\s; hd(Cs) =:= $/ ->
+    Rest = parse_slot(Cs),
+    parse_nodes(Rest, [slot | Acc]);
 parse_nodes("<" ++ Cs, Acc) ->
     {Node, Rest} = parse_element(Cs),
     parse_nodes(Rest, [Node | Acc]);
@@ -139,6 +144,15 @@ parse_attrs(Cs0, Acc) ->
 take_quoted([$" | Cs], Acc) -> {lists:reverse(Acc), Cs};
 take_quoted([C | Cs], Acc)  -> take_quoted(Cs, [C | Acc]);
 take_quoted([], _Acc)       -> error({parse_error, unterminated_attribute}).
+
+%% --- Slots ---
+
+%% <slot /> is self-closing only; it carries no attributes or children.
+parse_slot(Cs) ->
+    case skip_ws(Cs) of
+        "/>" ++ Rest -> Rest;
+        Other        -> error({parse_error, {slot_must_be_self_closing, Other}})
+    end.
 
 %% --- Components ---
 
@@ -237,6 +251,8 @@ dom_ir({element, Tag, Attrs, Children}) ->
         #ir_list{elements = [attr_ir(A) || A <- Attrs], tail = nil},
         dom_ir_list(Children)
     ]};
+dom_ir(slot) ->
+    #ir_tuple{elements = [#ir_atom{value = slot}]};
 dom_ir({component, Module, Props}) ->
     #ir_tuple{elements = [
         #ir_atom{value = component},

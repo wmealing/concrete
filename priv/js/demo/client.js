@@ -104,6 +104,9 @@ const Client = {
       case "component":
         throw new Error(
           "client-side component embedding is not supported yet (Phase 5)");
+      case "slot":
+        throw new Error(
+          "client-side layout re-rendering is not supported yet (Phase 5)");
       default:
         throw new Error(`unknown DOM node tag: ${tag.value}`);
     }
