@@ -44,7 +44,7 @@ route_for(Module) ->
 system_routes() ->
     [
         {"/concrete/command",      concrete_command_handler, #{}},
-        {"/concrete/sse",          concrete_sse_handler,     #{}},
+        {"/concrete/sse/:id",      concrete_sse_handler,     #{}},
         {"/concrete/ws",           concrete_ws_handler,      #{}},
         {"/concrete/assets/[...]", concrete_asset_handler, #{}}
     ].
