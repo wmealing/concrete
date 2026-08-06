@@ -73,6 +73,22 @@ const Client = {
     Client.container.innerHTML = Client.domToHtml(dom);
   },
 
+  // Renders a layout module's own template with pageHtml (already-
+  // rendered markup, typically from Client.domToHtml on a page's own
+  // render/1 output) spliced in wherever <slot /> appears -- the
+  // client-side equivalent of concrete_renderer:wrap_in_layout/2.
+  // Client.init/dispatch don't call this: they keep re-rendering only
+  // the page's own content into its mount point, same as always, since
+  // the layout shell around that mount point is already static HTML
+  // from the initial server render. This exists so a bundle that
+  // includes a layout module (see rebar_compiler_concrete's layout
+  // discovery) has a real, working way to render it, for callers that
+  // want the whole tree client-side.
+  renderWithLayout(layoutModuleName, layoutState, pageHtml) {
+    const layoutDom = Interpreter.call(layoutModuleName, "render", 1, [layoutState]);
+    return Client.domToHtml(layoutDom, pageHtml);
+  },
+
   // --- DOM AST terms -> HTML ---
 
   voidElements: new Set([
@@ -80,8 +96,14 @@ const Client = {
     "link", "meta", "param", "source", "track", "wbr",
   ]),
 
-  domToHtml(node) {
-    if (node.type === "list") return node.data.map(Client.domToHtml).join("");
+  // slotHtml is only ever set by renderWithLayout, and only threaded
+  // through element children -- a <:component>'s own template starts a
+  // fresh slot context (it can't see its parent's slot), matching
+  // concrete_renderer:render_node/3's the same way server-side.
+  domToHtml(node, slotHtml) {
+    if (node.type === "list") {
+      return node.data.map((n) => Client.domToHtml(n, slotHtml)).join("");
+    }
     const [tag, ...rest] = node.data;
     switch (tag.value) {
       case "text":
@@ -98,7 +120,7 @@ const Client = {
           return `<${name.value}${attrsHtml}>`;
         }
         return `<${name.value}${attrsHtml}>` +
-               Client.domToHtml(children) +
+               Client.domToHtml(children, slotHtml) +
                `</${name.value}>`;
       }
       case "component": {
@@ -115,11 +137,13 @@ const Client = {
         const childState =
           Interpreter.mapLookup(childComponent, Type.atom("state")) || Type.map([]);
         const childDom = Interpreter.call(modName, "render", 1, [childState]);
-        return Client.domToHtml(childDom);
+        return Client.domToHtml(childDom); // fresh slot context -- no slotHtml passed
       }
       case "slot":
-        throw new Error(
-          "client-side layout re-rendering is not supported yet (Phase 5)");
+        if (slotHtml === undefined) {
+          throw new Error("slot rendered outside a layout context");
+        }
+        return slotHtml;
       default:
         throw new Error(`unknown DOM node tag: ${tag.value}`);
     }

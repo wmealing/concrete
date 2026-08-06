@@ -11,7 +11,9 @@
     hydrate_renders_server_state/1,
     dispatch_updates_dom/1,
     click_listener_dispatches/1,
-    embedded_component_renders/1
+    embedded_component_renders/1,
+    render_with_layout_fills_slot/1,
+    slot_outside_layout_throws/1
 ]).
 
 all() ->
@@ -22,7 +24,9 @@ groups() ->
     [{all_parallel, [parallel], [hydrate_renders_server_state,
      dispatch_updates_dom,
      click_listener_dispatches,
-     embedded_component_renders]}].
+     embedded_component_renders,
+     render_with_layout_fills_slot,
+     slot_outside_layout_throws]}].
 init_per_suite(Config) ->
     case os:find_executable("node") of
         false -> {skip, "node not found on PATH"};
@@ -70,6 +74,36 @@ embedded_component_renders(Config) ->
     Out = run_client_multi(Config, fixture_widget, [fixture_widget, fixture_badge], #{}, ""),
     [First | _] = lines(Out),
     <<"<span class=\"badge\">20</span>">> = First.
+
+%% Client.renderWithLayout is the client-side equivalent of
+%% concrete_renderer:wrap_in_layout/2 -- render fixture_layout's own
+%% template (declared as fixture_layout_page's layout) with the page's
+%% already-rendered mount HTML spliced in at <slot />.
+render_with_layout_fills_slot(Config) ->
+    Out = run_client_multi(Config, fixture_layout_page,
+        [fixture_layout_page, fixture_layout], #{},
+        "const propsMap = Type.map([[Type.atom(\"title\"), Type.bitstring(\"Demo\")]]);\n"
+        "const layoutInit = Interpreter.call(\"fixture_layout\", \"init\", 2, [propsMap, Type.map([])]);\n"
+        "const layoutState = Interpreter.mapLookup(layoutInit.data[0], Type.atom(\"state\"));\n"
+        "console.log(Client.renderWithLayout(\"fixture_layout\", layoutState, container.innerHTML));\n"),
+    [PageOnly, Wrapped | _] = lines(Out),
+    <<"<p>page content</p>">> = PageOnly,
+    <<"<html><head><title>Demo</title></head>"
+      "<body><p>page content</p></body></html>">> = Wrapped.
+
+%% A bare <slot /> with no layout wrapping it is a template error --
+%% same as concrete_renderer:render_node/3's slot_outside_layout, just
+%% client-side.
+slot_outside_layout_throws(Config) ->
+    Out = run_client(Config, #{},
+        "try {\n"
+        "  Client.domToHtml(Type.tuple([Type.atom(\"slot\")]));\n"
+        "  console.log(\"NO_THROW\");\n"
+        "} catch (e) {\n"
+        "  console.log(\"THROW:\" + e.message);\n"
+        "}\n"),
+    [_Initial, Result | _] = lines(Out),
+    <<"THROW:slot rendered outside a layout context">> = Result.
 
 %% --- Harness ---
 %% Builds the page bundle exactly like template_demo:bundle_js/1 (BEAM

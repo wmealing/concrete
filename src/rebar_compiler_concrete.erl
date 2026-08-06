@@ -71,12 +71,21 @@ clean(_AppInfo, _Config) ->
 templates_dir(AppInfo) ->
     filename:join(rebar_app_info:priv_dir(AppInfo), "templates").
 
-%% Starting from PageModule, follow <:component> references in every
-%% module's own template to build the full set of modules this page's
-%% bundle needs, plus each one's parsed DOM (reused later for both entry
-%% discovery and render/1 generation, so it's only parsed once).
+%% Starting from PageModule (and its layout module, if it declares one
+%% via -concrete([{layout, Mod}, ...])), follow <:component> references
+%% in every module's own template to build the full set of modules this
+%% page's bundle needs, plus each one's parsed DOM (reused later for
+%% both entry discovery and render/1 generation, so it's only parsed
+%% once). The layout root has to be found this way rather than treated
+%% like any other discovered module: unlike <:component>, a layout
+%% reference lives in the page's -concrete(...) attribute, not its
+%% template, so component_modules/1 alone would never find it.
 discover_modules(PageModule, TemplatesDir) ->
-    discover_modules([PageModule], TemplatesDir, [], #{}).
+    Roots = case concrete_renderer:layout_for(PageModule) of
+        undefined           -> [PageModule];
+        {LayoutModule, _Ps} -> [PageModule, LayoutModule]
+    end,
+    discover_modules(Roots, TemplatesDir, [], #{}).
 
 discover_modules([], _TemplatesDir, Seen, DOMs) ->
     {lists:reverse(Seen), DOMs};

@@ -51,24 +51,31 @@ originally scoped — see below.
   set, and `client.js` actually renders the child (`init/2` then `render/1`)
   instead of throwing. Proven with a real Node execution test
   (`client_SUITE:embedded_component_renders`), not just server-side.
+- Client-side layout `<slot />` rendering: `discover_modules/2` also finds a
+  page's declared layout (`concrete_renderer:layout_for/1`, read from
+  `-concrete([..., {layout, Mod}])` — not from the template, so it's a
+  separate root, not something `component_modules/1` could ever find) and
+  bundles it the same way. `client.js` gained `Client.renderWithLayout/3`,
+  the client-side equivalent of `concrete_renderer:wrap_in_layout/2`: it
+  renders the layout's own template with already-rendered page HTML spliced
+  in at `<slot />`. `Client.init`/`dispatch` deliberately don't call it —
+  the mount point (`#concrete-root`) already sits inside the
+  server-rendered, static layout shell, so re-rendering only the page's own
+  content into it is correct as-is; `renderWithLayout` exists as a real,
+  tested capability for anything that needs the whole tree client-side.
+  Proven in Node (`client_SUITE:render_with_layout_fills_slot`,
+  `slot_outside_layout_throws`).
 
 **Known gaps (not yet built):**
 1. **No client-side vdom diffing.** `priv/js/demo/client.js` does a full
    `innerHTML` replace on every action instead of the diff+patch this document
    calls for (Phase 3.3). `priv/js/upstream/vdom.mjs` and `renderer.mjs` are
-   kept as an unadapted reference for this.
+   kept as an unadapted reference for this. **Next up.**
 2. **No declarative client-side command dispatch.** `concrete-click` gets
    automatic action dispatch; there's no equivalent for commands — a
    component has to hand-call the `http:post_json/2` BIF or open its own
    WebSocket, as `ws_demo` does.
-3. **Layout `<slot />` is still server-side only.** `<:component>` embedding
-   (above) is done, but a layout's `<slot />` still throws
-   `"not supported yet (Phase 5)"` in compiled client bundles — a page with a
-   layout can only be server-rendered once; an action-triggered client
-   re-render crashes if the *layout* template is what's involved (a
-   re-render of the page's own content, without its layout shell, works).
-   **Next up.**
-4. **No end-to-end integration test.** Phase 7 wants Common Test against a
+3. **No end-to-end integration test.** Phase 7 wants Common Test against a
    real cowboy server with HTTP client assertions; coverage currently stops
    at unit/pipeline tests plus Node.js bundle execution (`js_exec_SUITE`).
 

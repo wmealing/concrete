@@ -5,7 +5,7 @@
 %% is emitted verbatim.
 -module(concrete_renderer).
 
--export([render_page/2, render_nodes/2, render_node/2, wrap_in_layout/2]).
+-export([render_page/2, render_nodes/2, render_node/2, wrap_in_layout/2, layout_for/1]).
 
 -spec render_page(module(), map()) -> {iodata(), binary(), map()}.
 render_page(PageModule, Params) ->
