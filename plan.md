@@ -65,17 +65,34 @@ originally scoped — see below.
   tested capability for anything that needs the whole tree client-side.
   Proven in Node (`client_SUITE:render_with_layout_fills_slot`,
   `slot_outside_layout_throws`).
+- Client-side vdom diffing: `client.js` no longer does a full `innerHTML`
+  replace on every action. `Client.render()` now builds a small vnode tree
+  from the compiled `render/1` output (`buildVNode`/`buildVNodeList` —
+  `{kind: "text"}` or `{kind: "element", tag, attrs, children}`,
+  `<:component>` flattened in place same as before) and diffs it against the
+  previous render's tree (`patchNode`/`patchAttrs`/`patchChildren`): unchanged
+  subtrees are left alone, changed text/attrs are mutated on the existing DOM
+  node, and only a changed element tag/kind or list length forces a real
+  create/replace/remove. Index-based and keyless — the template language has
+  no keyed loops, so nothing produces a case that would need more than that.
+  The very first render (hydration) still clears and rebuilds once, same as
+  before; only later re-renders actually diff. This isn't the same
+  implementation this document originally called for (reusing upstream's
+  `vdom.mjs`/`renderer.mjs` — still kept as unadapted reference), it's a
+  smaller purpose-built one, but it satisfies the same goal. Node's test
+  harness (`client_SUITE`) now runs against a small hand-rolled fake DOM
+  (`createElement`/`appendChild`/`replaceChild`/etc., no jsdom dependency,
+  consistent with the project avoiding npm deps) instead of an innerHTML-only
+  stub, and `dispatch_patches_dom_in_place` asserts DOM node *identity*
+  survives a re-render — the actual point of diffing, not just that the
+  resulting HTML is correct.
 
 **Known gaps (not yet built):**
-1. **No client-side vdom diffing.** `priv/js/demo/client.js` does a full
-   `innerHTML` replace on every action instead of the diff+patch this document
-   calls for (Phase 3.3). `priv/js/upstream/vdom.mjs` and `renderer.mjs` are
-   kept as an unadapted reference for this. **Next up.**
-2. **No declarative client-side command dispatch.** `concrete-click` gets
+1. **No declarative client-side command dispatch.** `concrete-click` gets
    automatic action dispatch; there's no equivalent for commands — a
    component has to hand-call the `http:post_json/2` BIF or open its own
-   WebSocket, as `ws_demo` does.
-3. **No end-to-end integration test.** Phase 7 wants Common Test against a
+   WebSocket, as `ws_demo` does. **Next up.**
+2. **No end-to-end integration test.** Phase 7 wants Common Test against a
    real cowboy server with HTTP client assertions; coverage currently stops
    at unit/pipeline tests plus Node.js bundle execution (`js_exec_SUITE`).
 

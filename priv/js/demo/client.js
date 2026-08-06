@@ -9,13 +9,17 @@
 //    server rendered, so the markup replaces itself identically)
 //
 // Dispatch cycle: action name -> compiled Mod:action/3 -> new component
-// map -> render/1 -> container.innerHTML. Full re-render for now; vdom
-// diffing arrives with the Phase 5 runtime.
+// map -> render/1 -> diff against the previous render's vnode tree ->
+// patch only what changed into the real DOM (see "Vnode diffing"
+// below). Client.renderWithLayout (layouts are never part of this
+// reactive loop -- see its own comment) still goes through the older,
+// simpler domToHtml string renderer instead.
 
 const Client = {
   module: null,
   component: null,
   container: null,
+  vnodes: null, // the previous render's vnode tree, or null before the first render
 
   // --- Wire format (matches concrete_serializer) ---
 
@@ -70,7 +74,19 @@ const Client = {
     const state =
       Interpreter.mapLookup(Client.component, Type.atom("state")) || Type.map([]);
     const dom = Interpreter.call(Client.module, "render", 1, [state]);
-    Client.container.innerHTML = Client.domToHtml(dom);
+    const newVnodes = Client.buildVNodeList(dom);
+    if (Client.vnodes === null) {
+      // First render: the container already holds the server-rendered
+      // HTML (that's the point of hydration), so it's cleared and
+      // rebuilt from freshly created DOM nodes matching newVnodes once,
+      // rather than diffed against nothing. Every render after this one
+      // patches in place instead.
+      Client.container.innerHTML = "";
+      for (const v of newVnodes) Client.container.appendChild(Client.createDomNode(v));
+    } else {
+      Client.patchChildren(Client.container, Client.vnodes, newVnodes);
+    }
+    Client.vnodes = newVnodes;
   },
 
   // Renders a layout module's own template with pageHtml (already-
@@ -124,19 +140,7 @@ const Client = {
                `</${name.value}>`;
       }
       case "component": {
-        // rest = [Type.atom(moduleName), Type.list([Type.tuple([key, value]), ...])].
-        // Prop values are already fully evaluated Type terms -- the
-        // encoder inlines each prop's compiled expression directly into
-        // this list literal inside the parent's own render/1, so by the
-        // time render/1 returns, there's nothing left to evaluate here.
-        const [modAtom, propsListTerm] = rest;
-        const modName = modAtom.value;
-        const propsMap = Type.map(propsListTerm.data.map((pair) => pair.data));
-        const initResult = Interpreter.call(modName, "init", 2, [propsMap, Type.map([])]);
-        const childComponent = initResult.data[0]; // {Component, Server} -> Component
-        const childState =
-          Interpreter.mapLookup(childComponent, Type.atom("state")) || Type.map([]);
-        const childDom = Interpreter.call(modName, "render", 1, [childState]);
+        const childDom = Client.resolveComponentDom(rest[0], rest[1]);
         return Client.domToHtml(childDom); // fresh slot context -- no slotHtml passed
       }
       case "slot":
@@ -146,6 +150,128 @@ const Client = {
         return slotHtml;
       default:
         throw new Error(`unknown DOM node tag: ${tag.value}`);
+    }
+  },
+
+  // A <:component> tag's compiled DOM node is
+  // [Type.atom("component"), Type.atom(moduleName), Type.list([Type.tuple([key, value]), ...])].
+  // Prop values are already fully evaluated Type terms -- the encoder
+  // inlines each prop's compiled expression directly into this list
+  // literal inside the parent's own render/1, so by the time render/1
+  // returns, there's nothing left to evaluate here. Shared by both
+  // domToHtml and the vnode builder below -- resolving a component
+  // means running its init/2 then render/1, the same regardless of
+  // which renderer consumes the result.
+  resolveComponentDom(modAtom, propsListTerm) {
+    const modName = modAtom.value;
+    const propsMap = Type.map(propsListTerm.data.map((pair) => pair.data));
+    const initResult = Interpreter.call(modName, "init", 2, [propsMap, Type.map([])]);
+    const childComponent = initResult.data[0]; // {Component, Server} -> Component
+    const childState =
+      Interpreter.mapLookup(childComponent, Type.atom("state")) || Type.map([]);
+    return Interpreter.call(modName, "render", 1, [childState]);
+  },
+
+  // --- Vnode diffing ---
+  //
+  // A vnode is either { kind: "text", text } or
+  // { kind: "element", tag, attrs, children: vnode[] } -- "text" and
+  // "expr" DOM AST nodes both normalize to the "text" vnode kind, since
+  // by the time render/1 has evaluated an {expr, _} node there's no
+  // remaining distinction (and using real Text nodes means the DOM
+  // itself handles escaping -- no HTML-escaping step needed here, unlike
+  // domToHtml's string path). A <:component> tag expands in place into
+  // zero or more of its own resolved vnodes (it isn't a DOM element
+  // itself, so it can't become one node -- same flattening domToHtml
+  // does by concatenating strings). buildVNodeList/buildVNode never see
+  // a "slot" node: layout rendering (renderWithLayout) doesn't go
+  // through this path -- see its own comment.
+
+  buildVNodeList(domList) {
+    return domList.data.flatMap((n) => Client.buildVNode(n));
+  },
+
+  buildVNode(node) {
+    const [tag, ...rest] = node.data;
+    switch (tag.value) {
+      case "text":
+        return [{ kind: "text", text: rest[0].value }];
+      case "expr":
+        return [{ kind: "text", text: Client.termToText(rest[0]) }];
+      case "element": {
+        const [name, attrs, children] = rest;
+        const attrsObj = {};
+        for (const pair of attrs.data) {
+          attrsObj[pair.data[0].value] = Client.termToText(pair.data[1]);
+        }
+        return [{
+          kind: "element",
+          tag: name.value,
+          attrs: attrsObj,
+          children: Client.buildVNodeList(children),
+        }];
+      }
+      case "component":
+        return Client.buildVNodeList(Client.resolveComponentDom(rest[0], rest[1]));
+      case "slot":
+        throw new Error("slot rendered outside a layout context");
+      default:
+        throw new Error(`unknown DOM node tag: ${tag.value}`);
+    }
+  },
+
+  createDomNode(v) {
+    if (v.kind === "text") return document.createTextNode(v.text);
+    const el = document.createElement(v.tag);
+    for (const [name, value] of Object.entries(v.attrs)) el.setAttribute(name, value);
+    for (const child of v.children) el.appendChild(Client.createDomNode(child));
+    return el;
+  },
+
+  // Same element, same tag -> patch its attrs and children in place and
+  // keep the DOM node; anything else (different kind, or an element
+  // that changed tag) -> the node is replaced wholesale, same as a
+  // browser-native vdom library would do.
+  patchNode(domNode, oldV, newV) {
+    if (oldV.kind !== newV.kind || (newV.kind === "element" && oldV.tag !== newV.tag)) {
+      const fresh = Client.createDomNode(newV);
+      domNode.parentNode.replaceChild(fresh, domNode);
+      return;
+    }
+    if (newV.kind === "text") {
+      if (oldV.text !== newV.text) domNode.textContent = newV.text;
+      return;
+    }
+    Client.patchAttrs(domNode, oldV.attrs, newV.attrs);
+    Client.patchChildren(domNode, oldV.children, newV.children);
+  },
+
+  patchAttrs(el, oldAttrs, newAttrs) {
+    for (const name of Object.keys(oldAttrs)) {
+      if (!(name in newAttrs)) el.removeAttribute(name);
+    }
+    for (const [name, value] of Object.entries(newAttrs)) {
+      if (oldAttrs[name] !== value) el.setAttribute(name, value);
+    }
+  },
+
+  // Index-based, keyless reconciliation: appends cover growth, the
+  // trailing-removal pass covers shrinkage, and the overlapping region
+  // in between is patched node-for-node in place. That's enough for
+  // templates without list-driven reordering; nothing in the template
+  // language (no keyed loops) produces a case this would handle wrong,
+  // and it's a lot simpler than keyed diffing.
+  patchChildren(parentDom, oldVNodes, newVNodes) {
+    const newLen = newVNodes.length;
+    for (let i = 0; i < newLen; i++) {
+      if (i >= oldVNodes.length) {
+        parentDom.appendChild(Client.createDomNode(newVNodes[i]));
+      } else {
+        Client.patchNode(parentDom.childNodes[i], oldVNodes[i], newVNodes[i]);
+      }
+    }
+    while (parentDom.childNodes.length > newLen) {
+      parentDom.removeChild(parentDom.lastChild);
     }
   },
 

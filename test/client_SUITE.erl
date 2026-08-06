@@ -11,6 +11,7 @@
     hydrate_renders_server_state/1,
     dispatch_updates_dom/1,
     click_listener_dispatches/1,
+    dispatch_patches_dom_in_place/1,
     embedded_component_renders/1,
     render_with_layout_fills_slot/1,
     slot_outside_layout_throws/1
@@ -24,6 +25,7 @@ groups() ->
     [{all_parallel, [parallel], [hydrate_renders_server_state,
      dispatch_updates_dom,
      click_listener_dispatches,
+     dispatch_patches_dom_in_place,
      embedded_component_renders,
      render_with_layout_fills_slot,
      slot_outside_layout_throws]}].
@@ -64,6 +66,29 @@ click_listener_dispatches(Config) ->
         "console.log(container.innerHTML);\n"),
     [_Initial, AfterClick | _] = lines(Out),
     {_, _} = binary:match(AfterClick, <<"clicks: 1">>).
+
+%% The actual point of vdom diffing: an action that only changes one
+%% piece of text must patch that text node's value in place, not tear
+%% down and rebuild the DOM around it. <p>{@label}: {@count}</p> means
+%% the <p> has three text-vnode children (label, ": ", count); only the
+%% count one should ever change value, and the <p>, the <button>, and
+%% all three text node *objects* must survive the dispatch untouched.
+dispatch_patches_dom_in_place(Config) ->
+    Out = run_client(Config, #{},
+        "const pBefore = container.childNodes[0];\n"
+        "const buttonBefore = container.childNodes[1];\n"
+        "const textNodesBefore = pBefore.childNodes.slice();\n"
+        "Client.dispatch(\"increment\");\n"
+        "console.log(JSON.stringify({\n"
+        "  samePEl: container.childNodes[0] === pBefore,\n"
+        "  sameButtonEl: container.childNodes[1] === buttonBefore,\n"
+        "  sameTextNodes: pBefore.childNodes.every((n, i) => n === textNodesBefore[i]),\n"
+        "  countText: pBefore.childNodes[2].textContent,\n"
+        "}));\n"),
+    [_Initial, ResultJSON | _] = lines(Out),
+    {ok, #{<<"samePEl">> := true, <<"sameButtonEl">> := true,
+           <<"sameTextNodes">> := true, <<"countText">> := <<"1">>}} =
+        thoas:decode(ResultJSON).
 
 %% fixture_widget's template is just <:component module={fixture_badge}
 %% score={@n} /> -- a bundle built from both modules must render the
@@ -127,13 +152,7 @@ run_client(Config, Props, ExtraJS) ->
     {ok, ClientJS} = file:read_file(filename:join(DemoDir, "client.js")),
 
     Script = [
-        <<"const window = {};\n"
-          "const container = {\n"
-          "  innerHTML: \"\",\n"
-          "  listeners: {},\n"
-          "  addEventListener(type, fn) { this.listeners[type] = fn; },\n"
-          "};\n"
-          "const document = { getElementById: () => container };\n">>,
+        fake_dom_js(),
         Runtime, ClientJS, ModuleJS, RenderJS,
         <<"Client.init(\"fixture_counter\", \"root\", ">>, StateJSON, <<");\n"
           "console.log(container.innerHTML);\n">>,
@@ -160,13 +179,7 @@ run_client_multi(Config, PageModule, Modules, Props, ExtraJS) ->
     {ok, ClientJS} = file:read_file(filename:join(DemoDir, "client.js")),
 
     Script = [
-        <<"const window = {};\n"
-          "const container = {\n"
-          "  innerHTML: \"\",\n"
-          "  listeners: {},\n"
-          "  addEventListener(type, fn) { this.listeners[type] = fn; },\n"
-          "};\n"
-          "const document = { getElementById: () => container };\n">>,
+        fake_dom_js(),
         Runtime, ClientJS, JS,
         <<"Client.init(\"">>, atom_to_binary(PageModule), <<"\", \"root\", ">>, StateJSON, <<");\n"
           "console.log(container.innerHTML);\n">>,
@@ -188,3 +201,96 @@ module_and_render_js(Mod) ->
 
 lines(Bin) ->
     [L || L <- binary:split(Bin, <<"\n">>, [global]), L =/= <<>>].
+
+%% client.js's vnode patching (Client.createDomNode/patchNode/
+%% patchChildren) calls real DOM-node methods -- createElement,
+%% appendChild, replaceChild, removeChild, setAttribute, textContent --
+%% that the old innerHTML-string stub never needed to provide. This is
+%% a minimal DOM implementation covering exactly what client.js and
+%% these tests use, not a general one (e.g. its innerHTML setter only
+%% supports clearing to "", since that's the only way client.js ever
+%% calls it).
+fake_dom_js() ->
+    <<"const window = {};\n"
+      "class FakeText {\n"
+      "  constructor(text) { this.nodeType = 3; this.textValue = text; this.parentNode = null; }\n"
+      "  get textContent() { return this.textValue; }\n"
+      "  set textContent(v) { this.textValue = v; }\n"
+      "}\n"
+      "const fakeVoidElements = new Set([\n"
+      "  \"area\", \"base\", \"br\", \"col\", \"embed\", \"hr\", \"img\", \"input\",\n"
+      "  \"link\", \"meta\", \"param\", \"source\", \"track\", \"wbr\",\n"
+      "]);\n"
+      "function fakeEscape(s) {\n"
+      "  return s.replace(/&/g, \"&amp;\").replace(/</g, \"&lt;\").replace(/>/g, \"&gt;\");\n"
+      "}\n"
+      "function fakeEscapeAttr(s) { return fakeEscape(s).replace(/\"/g, \"&quot;\"); }\n"
+      "function fakeSerialize(node) {\n"
+      "  if (node.nodeType === 3) return fakeEscape(node.textValue);\n"
+      "  const attrsStr = node.attrOrder\n"
+      "    .map((n) => ` ${n}=\"${fakeEscapeAttr(node.attrs[n])}\"`).join(\"\");\n"
+      "  if (fakeVoidElements.has(node.tagName)) return `<${node.tagName}${attrsStr}>`;\n"
+      "  return `<${node.tagName}${attrsStr}>` +\n"
+      "    node.childNodes.map(fakeSerialize).join(\"\") + `</${node.tagName}>`;\n"
+      "}\n"
+      "class FakeElement {\n"
+      "  constructor(tag) {\n"
+      "    this.nodeType = 1;\n"
+      "    this.tagName = tag;\n"
+      "    this.attrOrder = [];\n"
+      "    this.attrs = {};\n"
+      "    this.childNodes = [];\n"
+      "    this.parentNode = null;\n"
+      "    this.listeners = {};\n"
+      "  }\n"
+      "  setAttribute(name, value) {\n"
+      "    if (!(name in this.attrs)) this.attrOrder.push(name);\n"
+      "    this.attrs[name] = String(value);\n"
+      "  }\n"
+      "  removeAttribute(name) {\n"
+      "    delete this.attrs[name];\n"
+      "    this.attrOrder = this.attrOrder.filter((n) => n !== name);\n"
+      "  }\n"
+      "  getAttribute(name) { return name in this.attrs ? this.attrs[name] : null; }\n"
+      "  appendChild(node) { node.parentNode = this; this.childNodes.push(node); return node; }\n"
+      "  removeChild(node) {\n"
+      "    const i = this.childNodes.indexOf(node);\n"
+      "    if (i >= 0) this.childNodes.splice(i, 1);\n"
+      "    node.parentNode = null;\n"
+      "    return node;\n"
+      "  }\n"
+      "  replaceChild(newNode, oldNode) {\n"
+      "    const i = this.childNodes.indexOf(oldNode);\n"
+      "    this.childNodes[i] = newNode;\n"
+      "    newNode.parentNode = this;\n"
+      "    oldNode.parentNode = null;\n"
+      "    return oldNode;\n"
+      "  }\n"
+      "  get lastChild() { return this.childNodes[this.childNodes.length - 1] || null; }\n"
+      "  get textContent() { return this.childNodes.map((c) => c.textContent).join(\"\"); }\n"
+      "  set textContent(v) {\n"
+      "    this.childNodes = [];\n"
+      "    if (v !== \"\") this.appendChild(new FakeText(v));\n"
+      "  }\n"
+      "  closest(selector) {\n"
+      "    const m = /^\\[([\\w-]+)\\]$/.exec(selector);\n"
+      "    let node = this;\n"
+      "    while (node) {\n"
+      "      if (node.nodeType === 1 && node.getAttribute(m[1]) !== null) return node;\n"
+      "      node = node.parentNode;\n"
+      "    }\n"
+      "    return null;\n"
+      "  }\n"
+      "  addEventListener(type, fn) { this.listeners[type] = fn; }\n"
+      "  get innerHTML() { return this.childNodes.map(fakeSerialize).join(\"\"); }\n"
+      "  set innerHTML(html) {\n"
+      "    if (html !== \"\") throw new Error(\"fakedom innerHTML setter only supports clearing\");\n"
+      "    this.childNodes = [];\n"
+      "  }\n"
+      "}\n"
+      "const container = new FakeElement(\"div\");\n"
+      "const document = {\n"
+      "  createElement: (tag) => new FakeElement(tag),\n"
+      "  createTextNode: (text) => new FakeText(text),\n"
+      "  getElementById: () => container,\n"
+      "};\n">>.
