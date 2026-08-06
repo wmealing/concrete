@@ -23,6 +23,64 @@ Non-goals (for v1):
 
 ---
 
+## Current Status
+
+The project shipped as **Concrete** (module prefix `concrete_*`), not under either
+working name above; the rest of this document is otherwise still the accurate
+design record. Phases 1–4 and 6 are functionally complete, including layouts
+(a plan item this document originally only sketched — see `-concrete([{route,
+...}, {layout, Module}])` and the `<slot />` template tag). Phase 7 is partial.
+Phase 5 (JS runtime) has a working lean implementation, but not the one
+originally scoped — see below.
+
+**Done:**
+- IR, transformer, encoder, call graph, dead-code elimination, BEAM reader, PLT
+- `.slab` template parser, server-side renderer, layouts with `<slot />`
+- cowboy routing, page/command/SSE/WS handlers, runtime dispatch, pub/sub,
+  serializer/deserializer
+- WebSocket action/command dispatch (`concrete_ws_handler` -> `concrete_runtime`),
+  wire-compatible with the HTTP command endpoint
+- SSE streams scoped per component (`/concrete/sse/:id`)
+- `rebar3 new concrete_app` project scaffolding
+- Example apps: counter, template/scoreboard, todo, canvas, gen_server,
+  process-ring, multiplayer snake (SSE), WebSocket actions/commands (`ws_demo`)
+- Client-side `<:component>` embedding: the bundler (`rebar_compiler_concrete`)
+  now walks `<:component>` references transitively (`discover_modules/2`) to
+  pull every embedded module's code and its own `render/1` into the page's
+  bundle, call-graph entries and bundle-staleness digests cover the whole
+  set, and `client.js` actually renders the child (`init/2` then `render/1`)
+  instead of throwing. Proven with a real Node execution test
+  (`client_SUITE:embedded_component_renders`), not just server-side.
+
+**Known gaps (not yet built):**
+1. **No client-side vdom diffing.** `priv/js/demo/client.js` does a full
+   `innerHTML` replace on every action instead of the diff+patch this document
+   calls for (Phase 3.3). `priv/js/upstream/vdom.mjs` and `renderer.mjs` are
+   kept as an unadapted reference for this.
+2. **No declarative client-side command dispatch.** `concrete-click` gets
+   automatic action dispatch; there's no equivalent for commands — a
+   component has to hand-call the `http:post_json/2` BIF or open its own
+   WebSocket, as `ws_demo` does.
+3. **Layout `<slot />` is still server-side only.** `<:component>` embedding
+   (above) is done, but a layout's `<slot />` still throws
+   `"not supported yet (Phase 5)"` in compiled client bundles — a page with a
+   layout can only be server-rendered once; an action-triggered client
+   re-render crashes if the *layout* template is what's involved (a
+   re-render of the page's own content, without its layout shell, works).
+   **Next up.**
+4. **No end-to-end integration test.** Phase 7 wants Common Test against a
+   real cowboy server with HTTP client assertions; coverage currently stops
+   at unit/pipeline tests plus Node.js bundle execution (`js_exec_SUITE`).
+
+**Deliberate deviations from this document (not gaps):**
+- `receive` in compiled action code is supported (this document originally
+  flagged it as a pitfall to warn on instead).
+- No `esbuild` dependency — the encoder emits ready-to-run JS directly, so
+  the external bundling step this document lists under Dependencies was
+  never needed.
+
+---
+
 ## Architecture
 
 ```

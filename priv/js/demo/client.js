@@ -101,9 +101,22 @@ const Client = {
                Client.domToHtml(children) +
                `</${name.value}>`;
       }
-      case "component":
-        throw new Error(
-          "client-side component embedding is not supported yet (Phase 5)");
+      case "component": {
+        // rest = [Type.atom(moduleName), Type.list([Type.tuple([key, value]), ...])].
+        // Prop values are already fully evaluated Type terms -- the
+        // encoder inlines each prop's compiled expression directly into
+        // this list literal inside the parent's own render/1, so by the
+        // time render/1 returns, there's nothing left to evaluate here.
+        const [modAtom, propsListTerm] = rest;
+        const modName = modAtom.value;
+        const propsMap = Type.map(propsListTerm.data.map((pair) => pair.data));
+        const initResult = Interpreter.call(modName, "init", 2, [propsMap, Type.map([])]);
+        const childComponent = initResult.data[0]; // {Component, Server} -> Component
+        const childState =
+          Interpreter.mapLookup(childComponent, Type.atom("state")) || Type.map([]);
+        const childDom = Interpreter.call(modName, "render", 1, [childState]);
+        return Client.domToHtml(childDom);
+      }
       case "slot":
         throw new Error(
           "client-side layout re-rendering is not supported yet (Phase 5)");

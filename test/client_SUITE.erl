@@ -10,7 +10,8 @@
 -export([
     hydrate_renders_server_state/1,
     dispatch_updates_dom/1,
-    click_listener_dispatches/1
+    click_listener_dispatches/1,
+    embedded_component_renders/1
 ]).
 
 all() ->
@@ -20,7 +21,8 @@ all() ->
 groups() ->
     [{all_parallel, [parallel], [hydrate_renders_server_state,
      dispatch_updates_dom,
-     click_listener_dispatches]}].
+     click_listener_dispatches,
+     embedded_component_renders]}].
 init_per_suite(Config) ->
     case os:find_executable("node") of
         false -> {skip, "node not found on PATH"};
@@ -58,6 +60,16 @@ click_listener_dispatches(Config) ->
         "console.log(container.innerHTML);\n"),
     [_Initial, AfterClick | _] = lines(Out),
     {_, _} = binary:match(AfterClick, <<"clicks: 1">>).
+
+%% fixture_widget's template is just <:component module={fixture_badge}
+%% score={@n} /> -- a bundle built from both modules must render the
+%% embedded child's own compiled render/1 client-side, the same way
+%% concrete_renderer already does server-side (see renderer_SUITE's
+%% render_component).
+embedded_component_renders(Config) ->
+    Out = run_client_multi(Config, fixture_widget, [fixture_widget, fixture_badge], #{}, ""),
+    [First | _] = lines(Out),
+    <<"<span class=\"badge\">20</span>">> = First.
 
 %% --- Harness ---
 %% Builds the page bundle exactly like template_demo:bundle_js/1 (BEAM
@@ -98,6 +110,47 @@ run_client(Config, Props, ExtraJS) ->
                          ++ ".js"),
     ok = file:write_file(File, unicode:characters_to_binary(Script)),
     iolist_to_binary(os:cmd("node " ++ File ++ " 2>&1")).
+
+%% Same idea as run_client/3, but bundles several modules together --
+%% mirrors what rebar_compiler_concrete:compile/4 does for a page that
+%% embeds <:component>s: every module's own compiled code plus its own
+%% render/1, concatenated into one script.
+run_client_multi(Config, PageModule, Modules, Props, ExtraJS) ->
+    {Component, _Server} = PageModule:init(Props, #{}),
+    StateJSON = thoas:encode(concrete_serializer:encode(Component)),
+
+    JS = [module_and_render_js(Mod) || Mod <- Modules],
+
+    DemoDir = filename:join([code:priv_dir(concrete), "js", "demo"]),
+    {ok, Runtime} = file:read_file(filename:join(DemoDir, "runtime.js")),
+    {ok, ClientJS} = file:read_file(filename:join(DemoDir, "client.js")),
+
+    Script = [
+        <<"const window = {};\n"
+          "const container = {\n"
+          "  innerHTML: \"\",\n"
+          "  listeners: {},\n"
+          "  addEventListener(type, fn) { this.listeners[type] = fn; },\n"
+          "};\n"
+          "const document = { getElementById: () => container };\n">>,
+        Runtime, ClientJS, JS,
+        <<"Client.init(\"">>, atom_to_binary(PageModule), <<"\", \"root\", ">>, StateJSON, <<");\n"
+          "console.log(container.innerHTML);\n">>,
+        ExtraJS
+    ],
+    File = filename:join(?config(priv_dir, Config),
+                         "client_" ++ integer_to_list(erlang:unique_integer([positive]))
+                         ++ ".js"),
+    ok = file:write_file(File, unicode:characters_to_binary(Script)),
+    iolist_to_binary(os:cmd("node " ++ File ++ " 2>&1")).
+
+module_and_render_js(Mod) ->
+    {ok, IR} = concrete_beam_reader:extract_ir(Mod),
+    ModuleJS = concrete_encoder:encode_module(IR),
+    {inline, DOM} = Mod:template(),
+    RenderJS = concrete_encoder:encode_function_def(
+                   Mod, concrete_template_parser:compile_render_fun(DOM)),
+    [ModuleJS, RenderJS].
 
 lines(Bin) ->
     [L || L <- binary:split(Bin, <<"\n">>, [global]), L =/= <<>>].

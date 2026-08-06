@@ -2,7 +2,7 @@
 -module(concrete_call_graph).
 -include("concrete_ir.hrl").
 
--export([build/2, build_from_entries/2, reachable/1]).
+-export([build/2, build_from_entries/2, reachable/1, page_entries/2]).
 
 -type mfa_key() :: {module(), atom(), arity()}.
 
@@ -15,10 +15,20 @@
 %% mark them (wrongly) as dead code.
 -spec build(module(), term()) -> digraph:graph().
 build(PageModule, PLT) ->
+    build_from_entries(page_entries(PageModule, PLT), PLT).
+
+%% The entry MFAs for one page or component module. Exposed on its own
+%% (not just folded into build/2) so a caller building one combined
+%% graph over several modules -- e.g. a page plus every component it
+%% embeds via <:component> -- can concatenate entry lists before
+%% calling build_from_entries/2 once, rather than unioning several
+%% separate graphs.
+-spec page_entries(module(), term()) -> [mfa_key()].
+page_entries(PageModule, PLT) ->
     BaseEntries = [{PageModule, init, 2}, {PageModule, template, 0}],
     ExtraEntries = [E || E <- [{PageModule, action, 3}, {PageModule, command, 3}],
                           concrete_plt:get(PLT, E) =/= not_found],
-    build_from_entries(BaseEntries ++ ExtraEntries, PLT).
+    BaseEntries ++ ExtraEntries.
 
 %% Build a call graph rooted at an explicit list of entry MFAs — used to
 %% additionally root the graph at component modules embedded via

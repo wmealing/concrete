@@ -20,7 +20,8 @@
 -module(concrete_template_parser).
 -include("concrete_ir.hrl").
 
--export([parse_file/1, parse_string/1, compile_render_fun/1, is_void_element/1]).
+-export([parse_file/1, parse_string/1, compile_render_fun/1, is_void_element/1,
+         component_modules/1]).
 
 -type dom_node() ::
     {element, binary(), [attr()], [dom_node()]}
@@ -217,6 +218,24 @@ parse_erlang_expr(Str0) ->
 rewrite_state_refs(Str) ->
     re:replace(Str, "@([a-z][a-zA-Z0-9_]*)", "maps:get(\\1, CONCRETE_STATE)",
                [global, {return, list}]).
+
+%% Every module directly embedded via <:component> anywhere in a DOM
+%% tree (recursing into element children; a component tag itself has no
+%% children in this syntax, so this does not walk into a component's
+%% own template -- the caller does that separately, one module's DOM
+%% at a time, to also catch components embedded transitively).
+-spec component_modules([dom_node()]) -> [module()].
+component_modules(Nodes) ->
+    lists:usort(component_modules(Nodes, [])).
+
+component_modules([], Acc) ->
+    Acc;
+component_modules([{component, Module, _Props} | Rest], Acc) ->
+    component_modules(Rest, [Module | Acc]);
+component_modules([{element, _Tag, _Attrs, Children} | Rest], Acc) ->
+    component_modules(Rest, component_modules(Children, Acc));
+component_modules([_ | Rest], Acc) ->
+    component_modules(Rest, Acc).
 
 %% --- Client-side adapter ---
 
