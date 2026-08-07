@@ -17,7 +17,10 @@
 %% rebar3 plugin entry point: registers rebar_compiler_concrete into
 %% the compiler pipeline for any project that lists `concrete` under
 %% {plugins, ...} / {project_plugins, ...}. rebar3 discovers this via
-%% a module matching the OTP application name.
+%% a module matching the OTP application name. Not part of the public
+%% API docs -- rebar_state:t/0 is an opaque type from rebar itself,
+%% which isn't a project dependency, so ex_doc can't resolve it.
+-doc false.
 -spec init(rebar_state:t()) -> {ok, rebar_state:t()}.
 init(State) ->
     {ok, rebar_state:append_compilers(State, [rebar_compiler_concrete])}.

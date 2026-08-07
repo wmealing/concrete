@@ -388,7 +388,8 @@ Round-trip equal: true
 implementation that lets `rebar3 compile` produce page bundles directly,
 instead of driving the pipeline by hand from the shell
 (`concrete_demo:bundle()` etc., as shown above). It's registered as an
-active compiler via `concrete:init/1`, which rebar3 calls automatically
+active compiler via `concrete`'s `init/1` (its rebar3 plugin hook, not
+part of the public API), which rebar3 calls automatically
 for any project that lists `concrete` under `{plugins, ...}` or
 `{project_plugins, ...}` — this is exactly what `rebar3 new concrete_app`
 scaffolds, see [Creating a new Concrete app](#creating-a-new-concrete-app)
