@@ -41,7 +41,11 @@ demos() ->
        desc => <<"Plain JavaScript, no compiled bundle -- every click sends a real "
                  "action/command message over one WebSocket to concrete_ws_handler, "
                  "dispatched server-side. The counter is a gen_server, so it survives "
-                 "a reload.">>}
+                 "a reload.">>},
+     #{id => spirograph, title => <<"three.js Spirograph">>, port => 8773, module => spirograph_demo,
+       desc => <<"A rotating, color-cycling spirograph drawn with three.js, loaded from a CDN "
+                 "&lt;script&gt; tag -- every THREE.* call is compiled Erlang, reaching the "
+                 "library through concrete_js, with no hand-written JavaScript at all.">>}
     ].
 
 %% Build + start every demo's own cowboy listener, then serve the

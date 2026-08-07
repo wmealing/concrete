@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Concrete — three.js spirograph demo</title>
+  <link rel="stylesheet" href="/theme.css">
+  <style>
+    body { text-align: center; }
+    #three-container { display: inline-block; line-height: 0; }
+    #three-container canvas { border-radius: var(--radius); }
+  </style>
+</head>
+<body>
+  <a class="back-link" href="http://localhost:8760/">&larr; All demos</a>
+  <p>Compiled Erlang <code>spirograph_app:tick/2</code> driving three.js (loaded from a CDN
+     <code>&lt;script&gt;</code> tag) through <code>concrete_js</code> -- every <code>THREE.*</code>
+     call below is a compiled Erlang call, not hand-written JavaScript.</p>
+  <div id="three-container"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+  <script src="/runtime.js"></script>
+  <script src="/spirograph/spirograph_app.js"></script>
+  <script src="/spirograph/spirograph_boot.js"></script>
+</body>
+</html>

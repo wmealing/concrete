@@ -46,7 +46,15 @@
     stdlib_lists_filter_member/1,
     stdlib_maps_fold/1,
     stdlib_maps_from_list/1,
-    stdlib_pipeline/1
+    stdlib_pipeline/1,
+    js_call_global_function/1,
+    js_call_method_via_handle/1,
+    js_get_set_roundtrip/1,
+    js_instanceof_and_typeof/1,
+    js_error_caught/1,
+    js_list_arg_unboxed_as_array/1,
+    js_map_arg_unboxed_as_object/1,
+    js_atom_paths_work_like_binaries/1
 ]).
 
 all() ->
@@ -92,7 +100,15 @@ groups() ->
      stdlib_lists_filter_member,
      stdlib_maps_fold,
      stdlib_maps_from_list,
-     stdlib_pipeline]}].
+     stdlib_pipeline,
+     js_call_global_function,
+     js_call_method_via_handle,
+     js_get_set_roundtrip,
+     js_instanceof_and_typeof,
+     js_error_caught,
+     js_list_arg_unboxed_as_array,
+     js_map_arg_unboxed_as_object,
+     js_atom_paths_work_like_binaries]}].
 init_per_suite(Config) ->
     case os:find_executable("node") of
         false -> {skip, "node not found on PATH"};
@@ -324,15 +340,97 @@ stdlib_pipeline(Config) ->
         "    Sq = [X * X || X <- lists:seq(1, 5), X rem 2 == 1],\n"
         "    lists:sum(Sq) - lists:nth(2, Sq) + maps:size(#{a => 1}).\n").
 
+%% --- concrete_js: interop with arbitrary already-loaded JS ---
+%% Each snippet mocks a "loaded via <script>" global the same way a real
+%% page would get one -- plain globalThis.X = ... assignment, injected
+%% before runtime.js loads (see run/3).
+
+js_call_global_function(Config) ->
+    <<"3">> = run(Config,
+        "globalThis.add = (a, b) => a + b;\n",
+        "main() -> concrete_js:call(<<\"add\">>, [1, 2]).\n").
+
+js_call_method_via_handle(Config) ->
+    <<"7">> = run(Config,
+        "globalThis.Counter = class {\n"
+        "  constructor(n) { this.n = n; }\n"
+        "  add(x) { this.n += x; return this.n; }\n"
+        "};\n",
+        "main() ->\n"
+        "    C = concrete_js:new(<<\"Counter\">>, [3]),\n"
+        "    concrete_js:call(C, <<\"add\">>, [4]).\n").
+
+js_get_set_roundtrip(Config) ->
+    <<"99">> = run(Config,
+        "globalThis.Box = class { constructor() { this.value = 1; } };\n",
+        "main() ->\n"
+        "    B = concrete_js:new(<<\"Box\">>, []),\n"
+        "    concrete_js:set(B, <<\"value\">>, 99),\n"
+        "    concrete_js:get(B, <<\"value\">>).\n").
+
+js_instanceof_and_typeof(Config) ->
+    <<"{true, <<\"number\">>}">> = run(Config,
+        "globalThis.Box = class {};\n",
+        "main() ->\n"
+        "    B = concrete_js:new(<<\"Box\">>, []),\n"
+        "    {concrete_js:instanceof(B, <<\"Box\">>), concrete_js:typeof(42)}.\n").
+
+%% A native call that throws surfaces as the same {js_error, Reason}
+%% tagged error an uncaught native exception in a plain try/catch
+%% already raises (runtime.js's Interpreter.tryCatch) -- catchable with
+%% ordinary Erlang try/catch, not a special interop-only mechanism.
+js_error_caught(Config) ->
+    <<"caught">> = run(Config, "",
+        "main() ->\n"
+        "    try concrete_js:call(<<\"Math.doesNotExist\">>, []) of\n"
+        "        _ -> ok\n"
+        "    catch error:{js_error, _} -> caught\n"
+        "    end.\n").
+
+%% Proves Args is unboxed to a real JS array, not a boxed Concrete list
+%% -- .reduce is a native Array method that would throw on a
+%% {type:"list", data:[...]} object.
+js_list_arg_unboxed_as_array(Config) ->
+    <<"6">> = run(Config,
+        "globalThis.sum = (arr) => arr.reduce((a, b) => a + b, 0);\n",
+        "main() -> concrete_js:call(<<\"sum\">>, [[1, 2, 3]]).\n").
+
+%% Proves a Concrete map argument becomes a plain JS object with string
+%% keys, not a boxed map term.
+js_map_arg_unboxed_as_object(Config) ->
+    <<"5">> = run(Config,
+        "globalThis.readX = (obj) => obj.x;\n",
+        "main() -> concrete_js:call(<<\"readX\">>, [#{x => 5}]).\n").
+
+%% Receiver/ClassPath/Method/Prop accept atoms as well as binaries --
+%% 'THREE.Scene' (quoted, not a valid bare atom) and a plain unquoted
+%% atom (add) for a method name known at compile time.
+js_atom_paths_work_like_binaries(Config) ->
+    <<"7">> = run(Config,
+        "globalThis.THREE = { Counter: class {\n"
+        "  constructor(n) { this.n = n; }\n"
+        "  add(x) { this.n += x; return this.n; }\n"
+        "} };\n",
+        "main() ->\n"
+        "    C = concrete_js:new('THREE.Counter', [3]),\n"
+        "    concrete_js:call(C, add, [4]).\n").
+
 %% --- Harness ---
 
 run(Config, Body) ->
+    run(Config, "", Body).
+
+%% GlobalsJS is injected before runtime.js loads, so it can set up
+%% globalThis bindings (mocking a <script>-tag-loaded library) that
+%% concrete_js:* BIFs resolve dotted paths against.
+run(Config, GlobalsJS, Body) ->
     Src = "-module(m).\n" ++ Body,
     JS = compile(Src),
     RuntimePath = filename:join([code:priv_dir(concrete), "js", "demo", "runtime.js"]),
     {ok, Runtime} = file:read_file(RuntimePath),
     Script = [
         <<"const window = {};\n">>,
+        unicode:characters_to_binary(GlobalsJS),
         Runtime,
         JS,
         <<"console.log(termToString(Interpreter.call(\"m\", \"main\", 0, [])));\n">>

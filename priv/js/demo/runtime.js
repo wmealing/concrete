@@ -114,6 +114,110 @@ function termToPlainJs(t) {
   }
 }
 
+// concrete_js:* value boxing: a native JS value -> a Concrete term.
+// Primitives map onto existing term shapes; anything else (a class
+// instance, a function, a DOM node, etc.) becomes an opaque native
+// handle -- a {js_native, TypeAtom, Ref} tuple -- rather than trying to
+// represent it as a term. Ref indexes nativeRegistry (below); jsUnbox
+// reverses this to get the real value back out for a later call.
+function jsBox(value) {
+  if (value === null || value === undefined) return Type.atom("undefined");
+  if (typeof value === "boolean") return boolAtom(value);
+  if (typeof value === "number") {
+    return Number.isInteger(value) ? Type.integer(value) : Type.float(value);
+  }
+  if (typeof value === "string") return Type.bitstring(value);
+  if (Array.isArray(value)) return Type.list(value.map(jsBox));
+  if (Object.getPrototypeOf(value) === Object.prototype) {
+    return Type.map(Object.entries(value).map(([k, v]) => [Type.bitstring(k), jsBox(v)]));
+  }
+  const ref = nextNativeRef++;
+  nativeRegistry.set(ref, value);
+  return Type.tuple([Type.atom("js_native"), Type.atom(typeof value), Type.integer(ref)]);
+}
+
+// The inverse: a Concrete term -> a plain JS value, for arguments going
+// *into* a native call. A native handle resolves back to the real
+// value via nativeRegistry; everything else mirrors jsBox's mapping.
+// Concrete has no tuple equivalent in JS, so a non-native tuple just
+// falls back to a plain array, same as a list.
+function jsUnbox(term) {
+  switch (term.type) {
+    case "atom":
+      if (term.value === "true") return true;
+      if (term.value === "false") return false;
+      if (term.value === "undefined") return undefined;
+      return term.value;
+    case "integer":
+    case "float":     return term.value;
+    case "bitstring": return term.value;
+    case "list":      return term.data.map(jsUnbox);
+    case "tuple":
+      if (term.data.length === 3 && term.data[0].type === "atom" &&
+          term.data[0].value === "js_native") {
+        return nativeRegistry.get(term.data[2].value);
+      }
+      return term.data.map(jsUnbox);
+    case "map": {
+      const obj = {};
+      for (const [k, v] of term.data) obj[jsUnbox(k)] = jsUnbox(v);
+      return obj;
+    }
+    default:
+      throw new Error(`cannot unbox term type: ${term.type}`);
+  }
+}
+
+// Resolves a dotted global path (e.g. "THREE.Vector3") against
+// globalThis, one segment at a time -- how concrete_js reaches a
+// library loaded via a plain <script> tag, with no import/bundling
+// step involved. Throws plainly if any segment is missing; callers
+// wrap this in jsInteropTry to turn that into a {js_error, _} term.
+function resolveGlobalPath(path) {
+  let value = globalThis;
+  for (const segment of path.split(".")) {
+    if (value === undefined || value === null) {
+      throw new Error(`undefined global path segment reaching "${segment}" in "${path}"`);
+    }
+    value = value[segment];
+  }
+  return value;
+}
+
+// Resolves a concrete_js Receiver/ClassPath argument: either a native
+// handle (a js_native tuple, unwrapped via jsUnbox) or a dotted global
+// path -- as a binary (<<"THREE.Scene">>) or, more idiomatically for a
+// name that's fixed at compile time, an atom ('THREE.Scene', quoted
+// since it isn't a valid bare atom; unquoted lowercase names like `add`
+// need no quotes at all). Both term shapes expose the same string via
+// .value, so this only has to decide *which* interpretation applies.
+function resolveReceiver(term) {
+  return term.type === "bitstring" || term.type === "atom"
+    ? resolveGlobalPath(term.value)
+    : jsUnbox(term);
+}
+
+// Wraps a native call/construction so any thrown JS error surfaces as
+// the same {js_error, Reason} tagged error Interpreter's own try/catch
+// compilation already raises for an uncaught native exception (see
+// tryCatch below), rather than inventing a second error shape for the
+// same kind of failure.
+function jsInteropTry(fn) {
+  try {
+    return fn();
+  } catch (e) {
+    throw new ErlangError("error",
+      Type.tuple([Type.atom("js_error"), Type.bitstring(String(e && e.message))]));
+  }
+}
+
+// Registry backing concrete_js:* native handles: integer ref -> real JS
+// value. No lifecycle/GC yet -- entries live for the page's lifetime,
+// the same pragmatic stance upstream Hologram's own native object
+// registry takes today.
+const nativeRegistry = new Map();
+let nextNativeRef = 1;
+
 // Registry of all compiled modules: modules["hello"]["greet/1"] = fn
 const modules = {};
 
@@ -966,6 +1070,47 @@ const Erlang = {
   // compiled Erlang, formatted the same way the interpreter would
   // print it at a shell prompt (see termToString).
   "debug:log/1": (term) => { console.log(termToString(term)); return Type.atom("ok"); },
+
+  // --- concrete_js: interop with arbitrary already-loaded JS (e.g. a
+  // library pulled in via a plain <script> tag). Receiver/ClassPath
+  // arguments accept a native handle, or a dotted global path as a
+  // binary or an atom (resolveReceiver/resolveGlobalPath above); Args
+  // is always a Concrete list, unboxed to a plain JS array before the
+  // native call runs. See src/concrete_js.erl for the Erlang-side
+  // signatures this implements.
+  "concrete_js:call/2": (path, args) => jsInteropTry(() => {
+    const segments = path.value.split(".");
+    const method = segments.pop();
+    const parent = segments.length === 0 ? globalThis : resolveGlobalPath(segments.join("."));
+    return jsBox(parent[method](...jsUnbox(args)));
+  }),
+  "concrete_js:call/3": (receiver, method, args) => jsInteropTry(() => {
+    const target = resolveReceiver(receiver);
+    return jsBox(target[method.value](...jsUnbox(args)));
+  }),
+  "concrete_js:new/2": (classPath, args) => jsInteropTry(() => {
+    const ctor = resolveReceiver(classPath);
+    return jsBox(Reflect.construct(ctor, jsUnbox(args)));
+  }),
+  "concrete_js:get/2": (receiver, prop) => jsInteropTry(() => {
+    const target = resolveReceiver(receiver);
+    return jsBox(target[prop.value]);
+  }),
+  "concrete_js:set/3": (receiver, prop, value) => jsInteropTry(() => {
+    const target = resolveReceiver(receiver);
+    target[prop.value] = jsUnbox(value);
+    return receiver;
+  }),
+  "concrete_js:delete/2": (receiver, prop) => jsInteropTry(() => {
+    const target = resolveReceiver(receiver);
+    delete target[prop.value];
+    return receiver;
+  }),
+  "concrete_js:instanceof/2": (value, classPath) => jsInteropTry(() => {
+    const ctor = resolveReceiver(classPath);
+    return boolAtom(jsUnbox(value) instanceof ctor);
+  }),
+  "concrete_js:typeof/1": (value) => jsInteropTry(() => Type.bitstring(typeof jsUnbox(value))),
 
   // --- ui module: demo-only slots for holding values across separate
   // cold top-level calls (one dom:on_click dispatch per click has no
