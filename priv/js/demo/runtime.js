@@ -1112,6 +1112,35 @@ const Erlang = {
   }),
   "concrete_js:typeof/1": (value) => jsInteropTry(() => Type.bitstring(typeof jsUnbox(value))),
 
+  // concrete_js:await(PromiseHandle) -> Ref. Registers .then()/.catch()
+  // on the real Promise a native handle wraps, and returns a real
+  // Erlang reference (the same Type.ref/Interpreter.newRef() pair
+  // make_ref/0 already uses) without blocking. Whenever the promise
+  // settles -- same tick if already resolved, or arbitrarily later --
+  // {Ref, ok, Value} or {Ref, error, Reason} lands in the mailbox of
+  // whichever process was running when await/1 was called, the same
+  // way any other Interpreter.send does. Only meaningful from inside a
+  // spawned process: a "cold" top-level call (callTopLevel/
+  // runEphemeral) can't survive a wait that doesn't finish within one
+  // synchronous step, and Client.dispatch's action/3 path doesn't even
+  // go through callTopLevel, so there's nowhere for a bare await to
+  // safely suspend outside spawn/1. currentPid === null here means
+  // exactly that mistake, so it's a clear {js_error, _} instead of a
+  // reply nothing is listening for.
+  "concrete_js:await/1": (promiseHandle) => jsInteropTry(() => {
+    if (Interpreter.currentPid === null) {
+      throw new Error("concrete_js:await/1 called outside a spawned process");
+    }
+    const promise = jsUnbox(promiseHandle);
+    const pid = Interpreter.currentPid;
+    const ref = Type.ref(Interpreter.newRef());
+    promise.then(
+      (value)  => Interpreter.send(pid, Type.tuple([ref, Type.atom("ok"), jsBox(value)])),
+      (reason) => Interpreter.send(pid, Type.tuple([ref, Type.atom("error"), jsBox(reason)])),
+    );
+    return ref;
+  }),
+
   // --- ui module: demo-only slots for holding values across separate
   // cold top-level calls (one dom:on_click dispatch per click has no
   // shared JS closure state) -- this runtime has no process registry

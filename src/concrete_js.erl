@@ -28,12 +28,22 @@
 %% deserializes server-sent state), so this matters for action/3, not
 %% init/2.
 %%
+%% await/1 is different from the other six: it is only safe to call
+%% from inside a process started with spawn/1. Concrete's receive
+%% already compiles to a real blocking generator, but a spawned
+%% process is the only place that can genuinely suspend across async
+%% time and be resumed later by an out-of-band message -- an action/3
+%% clause invoked directly (the concrete-click path) or any other
+%% "cold" top-level call is driven to completion in one synchronous
+%% step and has nowhere to put a wait that only finishes later. See
+%% await/1's own doc comment.
+%%
 %% Not built: js_import (pulling in an actual JS module/package --
 %% Concrete's build pipeline has no ES-module loader or bundler to hang
-%% that off yet), eval/exec, dispatch_event, and promise/async interop.
+%% that off yet), eval/exec, dispatch_event.
 -module(concrete_js).
 
--export([call/2, call/3, new/2, get/2, set/3, delete/2, instanceof/2, typeof/1]).
+-export([call/2, call/3, new/2, get/2, set/3, delete/2, instanceof/2, typeof/1, await/1]).
 
 -type dotted_path() :: binary() | atom().
 
@@ -60,3 +70,22 @@ instanceof(_Value, _ClassPath) -> false.
 
 -spec typeof(Value :: term()) -> atom().
 typeof(_Value) -> undefined.
+
+%% Registers interest in a JS Promise's settlement and returns
+%% immediately with a real Erlang reference -- it does not block on
+%% its own. Pair it with an ordinary receive, from inside a spawned
+%% process, to get the blocking wait:
+%%
+%%   Pid = spawn(fun() ->
+%%       Promise = ?js:call(<<"fetch">>, [Url]),
+%%       Ref = concrete_js:await(Promise),
+%%       receive
+%%           {Ref, ok, Response}  -> ...;
+%%           {Ref, error, Reason} -> ...
+%%       end
+%%   end).
+%%
+%% Calling this outside a spawned process raises {js_error, _}
+%% client-side, rather than sending a reply nothing is listening for.
+-spec await(PromiseHandle :: term()) -> reference().
+await(_PromiseHandle) -> make_ref().

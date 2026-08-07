@@ -54,7 +54,11 @@
     js_error_caught/1,
     js_list_arg_unboxed_as_array/1,
     js_map_arg_unboxed_as_object/1,
-    js_atom_paths_work_like_binaries/1
+    js_atom_paths_work_like_binaries/1,
+    js_await_resolved_promise/1,
+    js_await_deferred_promise/1,
+    js_await_rejected_promise/1,
+    js_await_outside_spawn_errors/1
 ]).
 
 all() ->
@@ -108,7 +112,11 @@ groups() ->
      js_error_caught,
      js_list_arg_unboxed_as_array,
      js_map_arg_unboxed_as_object,
-     js_atom_paths_work_like_binaries]}].
+     js_atom_paths_work_like_binaries,
+     js_await_resolved_promise,
+     js_await_deferred_promise,
+     js_await_rejected_promise,
+     js_await_outside_spawn_errors]}].
 init_per_suite(Config) ->
     case os:find_executable("node") of
         false -> {skip, "node not found on PATH"};
@@ -415,6 +423,78 @@ js_atom_paths_work_like_binaries(Config) ->
         "    C = concrete_js:new('THREE.Counter', [3]),\n"
         "    concrete_js:call(C, add, [4]).\n").
 
+%% --- concrete_js:await/1 ---
+%%
+%% await/1 only registers interest and returns a ref; it never blocks
+%% on its own. Its receiver -- the enclosing main/0 or the worker
+%% inside it -- is what actually blocks. A .then() callback is *always*
+%% a microtask in JS, even for an already-resolved promise, so main/0
+%% can never observe the awaited value by receiving it directly: by
+%% the time that microtask runs, the single synchronous step
+%% Interpreter.callTopLevel drives main/0 through is long finished (see
+%% concrete_js.erl's own module doc for why -- this is the exact
+%% "cold entry point" limitation await/1 exists to route around via a
+%% real spawned process). So these tests have the *worker* print the
+%% observed value with debug:log/1 once its own receive completes, and
+%% assert on that showing up in stdout -- main/0 itself just spawns and
+%% returns, which Node's event loop keeps running long enough to let
+%% the worker's promise settle before the process exits.
+
+js_await_resolved_promise(Config) ->
+    Out = run_blocking(Config,
+        "globalThis.resolvedPromise = () => Promise.resolve(42);\n",
+        "main() ->\n"
+        "    spawn(fun() ->\n"
+        "        Promise = concrete_js:call(<<\"resolvedPromise\">>, []),\n"
+        "        Ref = concrete_js:await(Promise),\n"
+        "        receive\n"
+        "            {Ref, ok, Value} -> debug:log(Value)\n"
+        "        end\n"
+        "    end).\n"),
+    {_, _} = binary:match(Out, <<"42">>).
+
+%% Same shape, but the promise resolves via a real setTimeout, proving
+%% the "message arrives arbitrarily later" path actually works, not
+%% just the same-tick (still-a-microtask) resolved case above.
+js_await_deferred_promise(Config) ->
+    Out = run_blocking(Config,
+        "globalThis.deferredPromise = () =>\n"
+        "  new Promise((resolve) => setTimeout(() => resolve(99), 20));\n",
+        "main() ->\n"
+        "    spawn(fun() ->\n"
+        "        Promise = concrete_js:call(<<\"deferredPromise\">>, []),\n"
+        "        Ref = concrete_js:await(Promise),\n"
+        "        receive\n"
+        "            {Ref, ok, Value} -> debug:log(Value)\n"
+        "        end\n"
+        "    end).\n"),
+    {_, _} = binary:match(Out, <<"99">>).
+
+js_await_rejected_promise(Config) ->
+    Out = run_blocking(Config,
+        "globalThis.rejectedPromise = () => Promise.reject(\"boom\");\n",
+        "main() ->\n"
+        "    spawn(fun() ->\n"
+        "        Promise = concrete_js:call(<<\"rejectedPromise\">>, []),\n"
+        "        Ref = concrete_js:await(Promise),\n"
+        "        receive\n"
+        "            {Ref, error, Reason} -> debug:log(Reason)\n"
+        "        end\n"
+        "    end).\n"),
+    {_, _} = binary:match(Out, <<"boom">>).
+
+%% await/1 is only meaningful inside a spawned process -- calling it
+%% directly raises {js_error, _} instead of silently sending a reply
+%% nothing will ever receive. Non-blocking (no spawn/receive needed),
+%% so a plain callTopLevel round trip is enough to check it.
+js_await_outside_spawn_errors(Config) ->
+    <<"caught">> = run_blocking(Config, "",
+        "main() ->\n"
+        "    try concrete_js:await(dummy) of\n"
+        "        _ -> ok\n"
+        "    catch error:{js_error, _} -> caught\n"
+        "    end.\n").
+
 %% --- Harness ---
 
 run(Config, Body) ->
@@ -434,6 +514,32 @@ run(Config, GlobalsJS, Body) ->
         Runtime,
         JS,
         <<"console.log(termToString(Interpreter.call(\"m\", \"main\", 0, [])));\n">>
+    ],
+    File = filename:join(?config(priv_dir, Config),
+                         atom_to_list(?FUNCTION_NAME) ++ "_"
+                         ++ integer_to_list(erlang:unique_integer([positive]))
+                         ++ ".js"),
+    ok = file:write_file(File, unicode:characters_to_binary(Script)),
+    Out = os:cmd("node " ++ File ++ " 2>&1"),
+    iolist_to_binary(string:trim(Out)).
+
+%% For a main/0 that itself blocks (contains a receive) -- run/3 above
+%% invokes main/0 via a bare Interpreter.call, which only works for
+%% non-blocking code; a blocking main/0 needs Interpreter.callTopLevel
+%% instead (same reason concrete_js:await/1 only works inside spawn/1
+%% in the first place -- see process_SUITE.erl's run_modules/3, same
+%% shape, generalized here with GlobalsJS injection).
+run_blocking(Config, GlobalsJS, Body) ->
+    Src = "-module(m).\n" ++ Body,
+    JS = compile(Src),
+    RuntimePath = filename:join([code:priv_dir(concrete), "js", "demo", "runtime.js"]),
+    {ok, Runtime} = file:read_file(RuntimePath),
+    Script = [
+        <<"const window = {};\n">>,
+        unicode:characters_to_binary(GlobalsJS),
+        Runtime,
+        JS,
+        <<"console.log(termToString(Interpreter.callTopLevel(\"m\", \"main\", 0, [])));\n">>
     ],
     File = filename:join(?config(priv_dir, Config),
                          atom_to_list(?FUNCTION_NAME) ++ "_"
