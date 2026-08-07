@@ -163,6 +163,29 @@ function jsUnbox(term) {
       for (const [k, v] of term.data) obj[jsUnbox(k)] = jsUnbox(v);
       return obj;
     }
+    case "anon_fun": {
+      // Wraps an Erlang fun as a real, callable JS function -- lets a
+      // fun be passed anywhere a native API wants a callback
+      // (addEventListener, Array.prototype.filter, an onclick property
+      // via concrete_js:set/3, setInterval, ...). Every concrete_js:*
+      // argument already goes through jsUnbox, so this needs no new
+      // BIF and no change on the Erlang side at all.
+      const fn = term;
+      return (...jsArgs) => {
+        const result = Interpreter.callAnon(fn, jsArgs.map(jsBox));
+        // A callback invoked by native JS is a "cold entry point" the
+        // same way a dom:on_click handler is: if the fun itself blocks
+        // (contains receive) and doesn't finish in one step, this is
+        // the same runEphemeral guard callTopLevel and the cross-module
+        // call path in defineErlangFunction already use for exactly
+        // that reason -- a clear error instead of handing the native
+        // caller an unfinished generator as if it were the real value.
+        const settled = (result && typeof result.next === "function")
+          ? Interpreter.runEphemeral(result)
+          : result;
+        return jsUnbox(settled);
+      };
+    }
     default:
       throw new Error(`cannot unbox term type: ${term.type}`);
   }

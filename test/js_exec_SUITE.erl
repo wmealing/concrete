@@ -58,7 +58,12 @@
     js_await_resolved_promise/1,
     js_await_deferred_promise/1,
     js_await_rejected_promise/1,
-    js_await_outside_spawn_errors/1
+    js_await_outside_spawn_errors/1,
+    js_callback_fun_receives_one_arg/1,
+    js_callback_fun_receives_two_args/1,
+    js_callback_fun_closure/1,
+    js_callback_fun_blocking_errors/1,
+    js_callback_fun_arity_mismatch_errors/1
 ]).
 
 all() ->
@@ -116,7 +121,12 @@ groups() ->
      js_await_resolved_promise,
      js_await_deferred_promise,
      js_await_rejected_promise,
-     js_await_outside_spawn_errors]}].
+     js_await_outside_spawn_errors,
+     js_callback_fun_receives_one_arg,
+     js_callback_fun_receives_two_args,
+     js_callback_fun_closure,
+     js_callback_fun_blocking_errors,
+     js_callback_fun_arity_mismatch_errors]}].
 init_per_suite(Config) ->
     case os:find_executable("node") of
         false -> {skip, "node not found on PATH"};
@@ -481,6 +491,58 @@ js_await_outside_spawn_errors(Config) ->
     <<"caught">> = run_blocking(Config, "",
         "main() ->\n"
         "    try concrete_js:await(dummy) of\n"
+        "        _ -> ok\n"
+        "    catch error:{js_error, _} -> caught\n"
+        "    end.\n").
+
+%% --- Erlang funs as JS callbacks ---
+%%
+%% jsUnbox wraps any fun argument as a real, callable JS function --
+%% every concrete_js:* argument already goes through jsUnbox, so no new
+%% BIF is needed. These mock a plain global function that invokes its
+%% callback with a controlled argument count, rather than depending on
+%% a real DOM/array API's exact calling convention.
+
+js_callback_fun_receives_one_arg(Config) ->
+    <<"42">> = run(Config,
+        "globalThis.callWithOne = (fn) => fn(21);\n",
+        "main() -> concrete_js:call(<<\"callWithOne\">>, [fun(X) -> X * 2 end]).\n").
+
+js_callback_fun_receives_two_args(Config) ->
+    <<"7">> = run(Config,
+        "globalThis.callWithTwo = (fn) => fn(3, 4);\n",
+        "main() -> concrete_js:call(<<\"callWithTwo\">>, [fun(A, B) -> A + B end]).\n").
+
+%% The wrapped fun keeps its closed-over bindings.
+js_callback_fun_closure(Config) ->
+    <<"31">> = run(Config,
+        "globalThis.callWithOne = (fn) => fn(21);\n",
+        "main() ->\n"
+        "    N = 10,\n"
+        "    F = fun(X) -> X + N end,\n"
+        "    concrete_js:call(<<\"callWithOne\">>, [F]).\n").
+
+%% A callback fun invoked from native JS is a "cold entry point" the
+%% same way a dom:on_click handler is -- if it blocks (contains
+%% receive) and never finishes in one step, that's the same
+%% runEphemeral guard callTopLevel already uses, not a new mechanism.
+js_callback_fun_blocking_errors(Config) ->
+    <<"caught">> = run(Config,
+        "globalThis.callWithOne = (fn) => fn(21);\n",
+        "main() ->\n"
+        "    try concrete_js:call(<<\"callWithOne\">>, [fun(_X) -> receive never -> ok end end]) of\n"
+        "        _ -> ok\n"
+        "    catch error:{js_error, _} -> caught\n"
+        "    end.\n").
+
+%% The native call invokes the callback with one argument; the fun
+%% declares two -- Interpreter.callAnon's own badarity check fires,
+%% same as calling any other fun with the wrong number of arguments.
+js_callback_fun_arity_mismatch_errors(Config) ->
+    <<"caught">> = run(Config,
+        "globalThis.callWithOne = (fn) => fn(21);\n",
+        "main() ->\n"
+        "    try concrete_js:call(<<\"callWithOne\">>, [fun(A, B) -> A + B end]) of\n"
         "        _ -> ok\n"
         "    catch error:{js_error, _} -> caught\n"
         "    end.\n").
