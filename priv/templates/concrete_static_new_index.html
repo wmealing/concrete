@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>{{name}}</title>
+</head>
+<body>
+  <div id="{{name}}-root">
+    <p>Count: <input id="count" readonly value="0"></p>
+    <button data-action="increment">+</button>
+  </div>
+
+  <script src="runtime.js"></script>
+  <script src="{{name}}.js"></script>
+  <script>Interpreter.callTopLevel("{{name}}", "start", 0, []);</script>
+</body>
+</html>

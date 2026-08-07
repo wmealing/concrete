@@ -1,0 +1,16 @@
+{description, "A new Concrete app that compiles to a static HTML/JS page -- no cowboy, no server"}.
+{variables, [
+    {name, "my_app", "Name of the OTP application"}
+]}.
+
+{dir, "{{name}}"}.
+{dir, "{{name}}/src"}.
+{dir, "{{name}}/priv"}.
+
+{template, "concrete_static_new.erl",          "{{name}}/src/{{name}}.erl"}.
+{template, "concrete_static_new_build.erl",    "{{name}}/src/{{name}}_build.erl"}.
+{template, "concrete_static_new.app.src",      "{{name}}/src/{{name}}.app.src"}.
+{template, "concrete_static_new_rebar.config", "{{name}}/rebar.config"}.
+{template, "concrete_static_new_index.html",   "{{name}}/priv/index.html"}.
+{file,     "concrete_static_new_gitignore",    "{{name}}/.gitignore"}.
+{template, "concrete_static_new_README.md",    "{{name}}/README.md"}.
