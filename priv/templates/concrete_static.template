@@ -12,5 +12,6 @@
 {template, "concrete_static_new.app.src",      "{{name}}/src/{{name}}.app.src"}.
 {template, "concrete_static_new_rebar.config", "{{name}}/rebar.config"}.
 {template, "concrete_static_new_index.html",   "{{name}}/priv/index.html"}.
+{template, "concrete_static_new_Makefile",     "{{name}}/Makefile"}.
 {file,     "concrete_static_new_gitignore",    "{{name}}/.gitignore"}.
 {template, "concrete_static_new_README.md",    "{{name}}/README.md"}.

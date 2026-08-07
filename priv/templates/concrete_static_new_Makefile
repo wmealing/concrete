@@ -1,0 +1,7 @@
+.PHONY: build run
+
+build:
+	rebar3 shell --eval '{{name}}_build:build(), init:stop().'
+
+run:
+	open priv/index.html || xdg-open priv/index.html
