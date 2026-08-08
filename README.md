@@ -41,6 +41,8 @@ Then open **http://localhost:8760**.
 | gen_server-style Process | 8769 | A real `spawn`/`self`/`!`/`receive` generic-server loop (`concrete_gen_server.erl`) dispatching into a callback module, running in the browser. |
 | Process Ring (spawn/self/send/receive) | 8770 | Six spawned worker processes passing a token around a ring, with a live canvas visualization of every send/receive hop. |
 | Multiplayer Snake | 8771 | A real `gen_server` owns the board and broadcasts it over SSE to every connected browser — open it in two tabs and watch both snakes move live. |
+| WebSocket Actions & Commands | 8772 | Plain JavaScript, no compiled bundle — every click sends a real action/command message over one WebSocket to `concrete_ws_handler`, dispatched server-side. |
+| three.js Spirograph | 8773 | A rotating, color-cycling spirograph drawn with three.js, loaded from a CDN `<script>` tag — every `THREE.*` call is compiled Erlang, reaching the library through `concrete_js`. |
 
 Each demo also has its own runner module (`concrete_demo`, `template_demo`,
 `todo_demo`, `canvas_demo`, `gen_server_demo`, `process_viz_demo`,
@@ -266,6 +268,74 @@ The counter source lives in `concrete_demo:counter_src/0`. Edit it and rerun
 `concrete_demo:build().` — the running file server picks up the new bundle on
 the next page reload.
 
+### How Erlang talks to `<canvas>`
+
+Canvas drawing is exposed the same way the DOM is — a BIF module implemented
+in `runtime.js`, backed by a real `CanvasRenderingContext2D`:
+
+| Erlang call | Effect |
+|---|---|
+| `canvas:clear(Id)` | clear the whole canvas |
+| `canvas:width(Id)` / `canvas:height(Id)` | read the canvas's pixel dimensions |
+| `canvas:begin_path(Id)` / `canvas:move_to(Id, X, Y)` / `canvas:line_to(Id, X, Y)` / `canvas:arc(Id, X, Y, R, Start, End)` | build up a path, same shape as the native Canvas API |
+| `canvas:stroke(Id)` / `canvas:fill(Id)` | paint the current path |
+| `canvas:set_line_width(Id, W)` / `canvas:set_global_alpha(Id, A)` | stroke width / overall opacity |
+| `canvas:set_stroke_hsl(Id, H, S, L)` / `canvas:set_fill_hsl(Id, H, S, L)` | set stroke/fill color in HSL |
+| `canvas:set_fill_rgba(Id, R, G, B, A)` / `canvas:fill_rect(Id, X, Y, W, H)` | set fill color in RGBA / paint a filled rectangle |
+
+The Canvas Animation demo (port 8768, see [Try the demos](#try-the-demos))
+is a self-rescheduling `tick/1` loop — the same `dom:set_timeout/4`
+rescheduling pattern as the DOM counter above — that fades the previous
+frame and redraws a rotating, color-cycling flower of arcs each tick, all
+from `canvas:*` calls in Erlang. Its source is `example/canvas_app.erl`.
+
+### How Erlang calls native JavaScript
+
+`dom:*` and `canvas:*` cover the browser's own APIs, but any other
+already-loaded JavaScript — a library pulled in via a plain `<script>` tag,
+like three.js or Chart.js — is reachable through `concrete_js`, without any
+special compiler support:
+
+```erlang
+Scene = concrete_js:new('THREE.Scene', []),
+Geo   = concrete_js:new('THREE.BoxGeometry', [1, 1, 1]),
+Mesh  = concrete_js:new('THREE.Mesh', [Geo]),
+concrete_js:call(Scene, add, [Mesh]).
+```
+
+`concrete_js:call/2,3`, `new/2`, `get/2`, `set/3`, `delete/2`,
+`instanceof/2`, and `typeof/1` all resolve at runtime to entries in the
+same `Erlang["Mod:Fun/Arity"]` BIF table `dom:*`/`canvas:*` use — a
+`Receiver`/`ClassPath` argument is either a native handle returned by an
+earlier call, or a dotted path resolved against the browser's global scope
+(`<<"console.log">>` or, more idiomatically for a compile-time-fixed name,
+an atom like `'THREE.Scene'`). Ordinary Erlang funs can be passed anywhere
+a native API wants a callback (`?js:call(Element, addEventListener,
+[click, fun(_Event) -> ok end])`), and a throwing native call surfaces as
+a catchable `{js_error, Reason}`.
+
+`concrete_js:await/1` awaits a JS Promise from inside a process started
+with `spawn/1` — pair it with an ordinary `receive` to get a real blocking
+wait without freezing the browser tab:
+
+```erlang
+Pid = spawn(fun() ->
+    Promise = ?js:call(<<"fetch">>, [Url]),
+    Ref = concrete_js:await(Promise),
+    receive
+        {Ref, ok, Response}  -> ...;
+        {Ref, error, Reason} -> ...
+    end
+end).
+```
+
+The three.js Spirograph demo (port 8773, see [Try the demos](#try-the-demos))
+drives a whole rotating, color-cycling scene this way — every `THREE.*`
+call is compiled Erlang reaching the CDN-loaded library through
+`concrete_js`, with no hand-written JavaScript at all. See
+`src/concrete_js.erl` for the full reference (including the project-local
+`?js` shorthand macro).
+
 ## Dead-code elimination and bundling
 
 `concrete_demo:bundle().` demonstrates the full build pipeline:
@@ -382,50 +452,6 @@ type-tagged JSON wire format used between server and browser
 Round-trip equal: true
 ```
 
-## rebar3 compiler plugin
-
-`src/rebar_compiler_concrete.erl` is a `rebar_compiler` behaviour
-implementation that lets `rebar3 compile` produce page bundles directly,
-instead of driving the pipeline by hand from the shell
-(`concrete_demo:bundle()` etc., as shown above). It's registered as an
-active compiler via `concrete`'s `init/1` (its rebar3 plugin hook, not
-part of the public API), which rebar3 calls automatically
-for any project that lists `concrete` under `{plugins, ...}` or
-`{project_plugins, ...}` — this is exactly what `rebar3 new concrete_app`
-scaffolds, see [Creating a new Concrete app](#creating-a-new-concrete-app)
-above.
-
-What it does:
-
-1. **`context/1`** tells rebar3 where to look — Erlang source in `src/`,
-   compiling to `.mjs` under `priv/js/bundles`. This is how it plugs into
-   rebar3's normal build-graph/dependency tracking alongside the standard
-   `.erl → .beam` compiler pass.
-2. **`needed_files/4`** scans compiled `.beam` files in `ebin/` for
-   modules implementing `-behaviour(concrete_page)`, using
-   `module_info(attributes)`, and returns those whose BEAM digest has
-   changed since the last build (checked against the digest recorded in
-   the PLT) as the set to (re)bundle.
-3. **`compile/4`** does the real work per page module: loads the PLT
-   (`concrete_plt`), walks the module's call graph
-   (`concrete_call_graph:build/2`) pulling IR for any newly-reachable
-   `{M,F,A}` out of BEAM abstract code (`concrete_beam_reader`), encodes
-   the reachable graph to JS (`concrete_encoder:encode_bundle/2`), parses
-   the page's `.slab` template into a client-side `render/1` function and
-   appends it to the same bundle, and writes the result as a
-   content-addressed file — `<page_module>_<sha256>.mjs` — under
-   `priv/js/bundles/`. It also updates `concrete_manifest.json` (page
-   module → bundle filename) so the server handlers know which bundle to
-   serve for a given page, and persists the updated PLT (including the
-   new digest) back to disk.
-4. **`dependencies/3`** and **`clean/2`** are no-ops for now — incremental
-   dependency wiring and cleanup of generated bundles aren't implemented.
-
-In short, this is the same pipeline the shell demos exercise manually
-(`concrete_beam_reader` → `concrete_plt` → `concrete_call_graph` →
-`concrete_encoder`), packaged as a first-class compile step that runs for
-every `concrete_page` module in the project on `rebar3 compile`.
-
 ## Project structure
 
 ```
@@ -448,7 +474,3 @@ parts bin; its `bitstring.mjs` and `vdom.mjs` are candidates for later
 integration, but its interpreter contract is Elixir-specific and is not
 what the Concrete encoder targets. Compatibility ground truth:
 `js_exec_SUITE` and `client_SUITE` execute compiled bundles in Node.js.
-
-## Architecture overview
-
-See `CLAUDE.md` for the full architecture, component model, IR system, wire format, and porting notes from Hologram.
