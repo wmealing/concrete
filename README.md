@@ -101,6 +101,49 @@ Then visit `http://localhost:4001/` — the +/− buttons dispatch
 `my_app_page:action/3`, compiled to JavaScript at build time by
 `rebar_compiler_concrete` and executed in the browser.
 
+### Without a server: `concrete_static`
+
+If you don't want cowboy, gproc, or any server at all — just a static
+HTML/JS page you can open from `file://` or drop on any static host —
+use the `concrete_static` template instead:
+
+```
+rebar3 new concrete_static name=my_app
+```
+
+This creates `my_app/` with:
+
+```
+my_app/
+├── src/
+│   ├── my_app.erl         -- plain module, drives the DOM via dom:* BIFs directly
+│   │                          (no concrete_page/concrete_component behaviour, no .slab)
+│   ├── my_app_build.erl   -- build step: concrete:compile_module/1
+│   └── my_app.app.src
+├── priv/
+│   └── index.html         -- static page that loads the compiled bundle
+├── rebar.config
+├── Makefile                -- make build / make run wrappers
+└── README.md
+```
+
+Build and run it:
+
+```
+cd my_app
+make build   # writes priv/my_app.js and priv/runtime.js
+make run     # opens priv/index.html in your default browser
+```
+
+`make build` is a thin wrapper around a one-shot
+`rebar3 shell --eval '{{name}}_build:build(), init:stop().'` — rebar3 has
+no standalone "build" task since producing the JS means actually running
+`concrete:compile_module/1`, not just compiling `.beam` files. The
+generated `<script>` tags are classic scripts, not ES modules, so
+`priv/index.html` works straight from `file://`; you can also serve
+`priv/` with any static file server (`python3 -m http.server`, `npx
+serve`, etc.) if you prefer.
+
 ## Running the tests
 
 ### All suites
