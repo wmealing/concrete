@@ -458,6 +458,14 @@ const Interpreter = {
   defineErlangFunction(moduleName, funcName, arity, clauses) {
     if (!modules[moduleName]) modules[moduleName] = {};
     const key = `${funcName}/${arity}`;
+    const fullKey = `${moduleName}:${key}`;
+    if (nativeBifKeys.has(fullKey)) {
+      throw new Error(
+        `Refusing to overwrite native BIF Erlang["${fullKey}"] with a compiled definition. ` +
+        `${moduleName} should be tagged -concrete([{bif_module, true}]) so ` +
+        `concrete_beam_reader:extract_ir/1 never traces into it.`
+      );
+    }
     const impl = (args) => Interpreter.callClauses(args, clauses);
     modules[moduleName][key] = impl;
     Erlang[`${moduleName}:${key}`] = (...args) => {
@@ -1192,6 +1200,14 @@ const Erlang = {
     return pair ? Type.tuple([Type.atom("ok"), pair[1]]) : Type.atom("error");
   },
 };
+
+// Snapshot of every hand-written native BIF key, taken before any
+// compiled bundle runs. defineErlangFunction checks against this so a
+// module that should have been excluded from the call graph (see
+// concrete_beam_reader:is_bif_module/1) fails loudly instead of
+// silently clobbering the native implementation it was meant to be a
+// server-side pass-through for.
+const nativeBifKeys = new Set(Object.keys(Erlang));
 
 // Expose everything on window so demo scripts can use them as globals.
 window.Type        = Type;

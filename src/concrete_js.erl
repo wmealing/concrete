@@ -1,5 +1,14 @@
 -module(concrete_js).
 
+%% Tells concrete_beam_reader:extract_ir/1 to refuse to trace into this
+%% module's real (harmless pass-through) bodies, the same as it already
+%% refuses for dom/canvas/http, which have no .erl source to trace at
+%% all. Without this, the call graph walk would pull concrete_js's real
+%% bodies into the bundle and register them under the exact same
+%% Erlang["concrete_js:fun/arity"] keys runtime.js's hand-written native
+%% BIFs use, silently overwriting them. See extract_ir/1 for the check.
+-concrete([{bif_module, true}]).
+
 -moduledoc """
 Interop with arbitrary JavaScript already loaded in the browser -- a
 library pulled in via a plain `<script>` tag (three.js, Chart.js, etc.),
@@ -19,9 +28,13 @@ encoder has no special case for this module. `concrete_encoder` always
 emits `Erlang["Mod:Fun/Arity"](Args)` for a remote call, so
 `concrete_js:call/2` resolves at runtime to an entry in the `Erlang`
 BIF table in `priv/js/demo/runtime.js`, exactly the same path
-`dom:*`/`canvas:*` already use. That also means these functions carry
-no BEAM abstract code the call graph can trace into -- same as any
-other BIF module, and by design.
+`dom:*`/`canvas:*` already use. Unlike `dom:*`/`canvas:*` (which have
+no `.erl` source at all), this module *does* have real, traceable
+abstract code -- its `-concrete([{bif_module, true}])` attribute above
+is what tells `concrete_beam_reader:extract_ir/1` to refuse to trace
+into it, so the call graph walk never pulls its harmless pass-through
+bodies into a bundle and overwrites the hand-written native BIFs.
+Any future native-JS-fronting module needs the same attribute.
 
 ## The `?js` shorthand
 

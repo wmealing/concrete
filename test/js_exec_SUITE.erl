@@ -63,7 +63,8 @@
     js_callback_fun_receives_two_args/1,
     js_callback_fun_closure/1,
     js_callback_fun_blocking_errors/1,
-    js_callback_fun_arity_mismatch_errors/1
+    js_callback_fun_arity_mismatch_errors/1,
+    defining_over_native_bif_throws/1
 ]).
 
 all() ->
@@ -126,7 +127,8 @@ groups() ->
      js_callback_fun_receives_two_args,
      js_callback_fun_closure,
      js_callback_fun_blocking_errors,
-     js_callback_fun_arity_mismatch_errors]}].
+     js_callback_fun_arity_mismatch_errors,
+     defining_over_native_bif_throws]}].
 init_per_suite(Config) ->
     case os:find_executable("node") of
         false -> {skip, "node not found on PATH"};
@@ -397,6 +399,37 @@ js_instanceof_and_typeof(Config) ->
 %% tagged error an uncaught native exception in a plain try/catch
 %% already raises (runtime.js's Interpreter.tryCatch) -- catchable with
 %% ordinary Erlang try/catch, not a special interop-only mechanism.
+%% Regression test for the concrete_js shadowing bug: if a module
+%% tagged -concrete([{bif_module, true}]) (concrete_js.erl) were ever
+%% traced and compiled into a bundle despite concrete_beam_reader
+%% refusing to (beam_reader_SUITE covers that half), the compiled
+%% bundle would call Interpreter.defineErlangFunction("concrete_js",
+%% "call", 3, ...) exactly like this test does by hand -- simulating
+%% what a buggy bundle would emit, without needing the full rebar3
+%% compile pipeline. Confirms runtime.js's defense-in-depth guard
+%% (nativeBifKeys) turns that into a loud, actionable error instead of
+%% silently clobbering the real native BIF at Erlang["concrete_js:call/3"].
+defining_over_native_bif_throws(Config) ->
+    RuntimePath = filename:join([code:priv_dir(concrete), "js", "demo", "runtime.js"]),
+    {ok, Runtime} = file:read_file(RuntimePath),
+    Script = [
+        <<"const window = {};\n">>,
+        Runtime,
+        <<"try {\n">>,
+        <<"  Interpreter.defineErlangFunction(\"concrete_js\", \"call\", 3, []);\n">>,
+        <<"  console.log(\"NOT_THROWN\");\n">>,
+        <<"} catch (e) {\n">>,
+        <<"  console.log(e.message.includes(\"bif_module\") ? \"THROWN_OK\" : (\"THROWN_WRONG:\" + e.message));\n">>,
+        <<"}\n">>
+    ],
+    File = filename:join(?config(priv_dir, Config),
+                         atom_to_list(?FUNCTION_NAME) ++ "_"
+                         ++ integer_to_list(erlang:unique_integer([positive]))
+                         ++ ".js"),
+    ok = file:write_file(File, unicode:characters_to_binary(Script)),
+    Out = os:cmd("node " ++ File ++ " 2>&1"),
+    <<"THROWN_OK">> = iolist_to_binary(string:trim(Out)).
+
 js_error_caught(Config) ->
     <<"caught">> = run(Config, "",
         "main() ->\n"

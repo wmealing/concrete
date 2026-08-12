@@ -6,10 +6,11 @@
 
 -export([context/1, needed_files/4, dependencies/3, compile/4, clean/2]).
 %% Exported for direct testing -- discover_modules/2's recursive
-%% <:component> traversal and bundle_digest/2's dependency hashing are
-%% otherwise only reachable through compile/4, which needs a real
-%% rebar_app_info record to call.
--export([discover_modules/2, bundle_digest/2]).
+%% <:component> traversal, bundle_digest/2's dependency hashing, and
+%% populate_plt/2's call-graph-driven PLT population are otherwise only
+%% reachable through compile/4, which needs a real rebar_app_info
+%% record to call.
+-export([discover_modules/2, bundle_digest/2, populate_plt/2]).
 
 context(AppInfo) ->
     EbinDir = rebar_app_info:ebin_dir(AppInfo),

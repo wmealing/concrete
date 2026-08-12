@@ -12,7 +12,8 @@
     discovers_page_layout/1,
     no_layout_discovers_page_only/1,
     bundle_digest_is_deterministic/1,
-    bundle_digest_reflects_template_file_changes/1
+    bundle_digest_reflects_template_file_changes/1,
+    populate_plt_never_traces_concrete_js/1
 ]).
 
 all() ->
@@ -26,7 +27,8 @@ groups() ->
         discovers_page_layout,
         no_layout_discovers_page_only,
         bundle_digest_is_deterministic,
-        bundle_digest_reflects_template_file_changes
+        bundle_digest_reflects_template_file_changes,
+        populate_plt_never_traces_concrete_js
     ]}].
 
 discovers_embedded_component(_Config) ->
@@ -76,3 +78,23 @@ bundle_digest_reflects_template_file_changes(Config) ->
     ok = file:write_file(Path, "<p>v2</p>"),
     D2 = rebar_compiler_concrete:bundle_digest([fixture_page], PrivDir),
     true = D1 =/= D2.
+
+%% Regression test for the concrete_js shadowing bug, through the real
+%% pipeline: fixture_js_action_page's action/3 genuinely calls
+%% concrete_js:call/2, so it's a real entry in the reachable set
+%% concrete_call_graph builds. Before the fix, populate_plt/2 would
+%% happily cache concrete_js's own (harmless pass-through) function
+%% bodies alongside it -- which concrete_encoder would then emit as
+%% Interpreter.defineErlangFunction("concrete_js", ...) calls that
+%% clobber the hand-written native BIFs in runtime.js. After the fix,
+%% concrete_beam_reader refuses to trace concrete_js at all, so none of
+%% its MFAs ever make it into the PLT, no matter how it's reached.
+populate_plt_never_traces_concrete_js(_Config) ->
+    PLT = concrete_plt:new(),
+    ok = rebar_compiler_concrete:populate_plt(PLT, [fixture_js_action_page]),
+    not_found = concrete_plt:get(PLT, {concrete_js, call, 2}),
+    not_found = concrete_plt:get(PLT, {concrete_js, call, 3}),
+    %% Sanity check the walk actually reached real code (the page's own
+    %% action/3), so "nothing got cached" isn't just an artifact of the
+    %% walk never running.
+    {ok, _} = concrete_plt:get(PLT, {fixture_js_action_page, action, 3}).
