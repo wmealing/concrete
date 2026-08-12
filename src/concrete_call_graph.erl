@@ -8,11 +8,30 @@
 
 %% Build a call graph rooted at the page/component module's entry
 %% points: init/2 and template/0 are always roots (the JS runtime calls
-%% them directly, not via any traceable Erlang call); action/3 and
-%% command/3 are roots too when present — the browser dispatches to
-%% them directly from a concrete-click handler, never via a call
-%% reachable from init/2, so plain call-graph tracing would otherwise
-%% mark them (wrongly) as dead code.
+%% them directly, not via any traceable Erlang call); action/3 is a
+%% root too when present -- the browser dispatches to it directly from
+%% a concrete-click handler, never via a call reachable from init/2, so
+%% plain call-graph tracing would otherwise mark it (wrongly) as dead
+%% code.
+%%
+%% command/3 is deliberately NOT a root, unlike action/3. Every
+%% dispatch path that reaches it -- concrete_command_handler's HTTP
+%% POST handler and concrete_ws_handler's WebSocket handler, both via
+%% concrete_runtime:dispatch_command/4 -- calls Module:command/3 as an
+%% ordinary Erlang function call on the real BEAM. No compiled-JS path
+%% ever exists for it (grep priv/js/demo/client.js and runtime.js: the
+%% only thing that happens client-side is the POST/WS message itself,
+%% dispatchCommand never runs command/3 locally the way Client.dispatch
+%% runs action/3). Treating it as a root anyway used to force
+%% command/3's body through the JS encoder for no functional reason,
+%% breaking any use of a stdlib call the encoder doesn't special-case
+%% (io:format/2, logger:info/1,2, ...) even though that code would
+%% never execute in a browser. If a command/3 happens to be reachable
+%% some other way -- e.g. an action/3 clause
+%% calls it directly as a plain in-process function, which defeats the
+%% point of it being server-only but is legal Erlang -- ordinary call
+%% graph tracing from action/3 still picks it up and compiles it, same
+%% as any other function action/3 calls.
 -spec build(module(), term()) -> digraph:graph().
 build(PageModule, PLT) ->
     build_from_entries(page_entries(PageModule, PLT), PLT).
@@ -26,7 +45,7 @@ build(PageModule, PLT) ->
 -spec page_entries(module(), term()) -> [mfa_key()].
 page_entries(PageModule, PLT) ->
     BaseEntries = [{PageModule, init, 2}, {PageModule, template, 0}],
-    ExtraEntries = [E || E <- [{PageModule, action, 3}, {PageModule, command, 3}],
+    ExtraEntries = [E || E <- [{PageModule, action, 3}],
                           concrete_plt:get(PLT, E) =/= not_found],
     BaseEntries ++ ExtraEntries.
 

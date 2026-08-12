@@ -9,7 +9,8 @@
     transitive_calls_followed/1,
     unreachable_excluded/1,
     not_found_mfa_skipped/1,
-    remote_call_followed/1
+    remote_call_followed/1,
+    page_entries_includes_action_excludes_command/1
 ]).
 
 all() ->
@@ -22,7 +23,8 @@ groups() ->
         transitive_calls_followed,
         unreachable_excluded,
         not_found_mfa_skipped,
-        remote_call_followed
+        remote_call_followed,
+        page_entries_includes_action_excludes_command
     ]}].
 %% Build a PLT and a minimal page module that has init/2 and template/0.
 base_plt() ->
@@ -135,3 +137,33 @@ remote_call_followed(_Config) ->
     G = concrete_call_graph:build(rm, PLT),
     Reachable = concrete_call_graph:reachable(G),
     true = lists:member({other_mod, compute, 0}, Reachable).
+
+%% Regression test: command/3 must never be a root, unlike action/3.
+%% No dispatch path ever runs command/3 as compiled JS (both
+%% concrete_command_handler and concrete_ws_handler call it as an
+%% ordinary Erlang function on the real BEAM), so including it here
+%% used to force its body through the JS encoder for no reason,
+%% breaking any stdlib call the encoder doesn't special-case.
+page_entries_includes_action_excludes_command(_Config) ->
+    PLT = concrete_plt:new(),
+    TplDef = #ir_function_def{
+        name = template, arity = 0,
+        clauses = [#ir_clause{patterns = [], guards = [],
+                              body = [#ir_atom{value = ok}]}]
+    },
+    ActionDef = #ir_function_def{
+        name = action, arity = 3,
+        clauses = [#ir_clause{patterns = [#ir_wildcard{}, #ir_wildcard{}, #ir_wildcard{}],
+                              guards = [], body = [#ir_atom{value = ok}]}]
+    },
+    CommandDef = #ir_function_def{
+        name = command, arity = 3,
+        clauses = [#ir_clause{patterns = [#ir_wildcard{}, #ir_wildcard{}, #ir_wildcard{}],
+                              guards = [], body = [#ir_atom{value = ok}]}]
+    },
+    concrete_plt:put(PLT, {ac_mod, template, 0}, TplDef),
+    concrete_plt:put(PLT, {ac_mod, action,   3}, ActionDef),
+    concrete_plt:put(PLT, {ac_mod, command,  3}, CommandDef),
+    Entries = concrete_call_graph:page_entries(ac_mod, PLT),
+    true  = lists:member({ac_mod, action, 3}, Entries),
+    false = lists:member({ac_mod, command, 3}, Entries).

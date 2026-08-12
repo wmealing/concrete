@@ -13,7 +13,9 @@
     no_layout_discovers_page_only/1,
     bundle_digest_is_deterministic/1,
     bundle_digest_reflects_template_file_changes/1,
-    populate_plt_never_traces_concrete_js/1
+    populate_plt_never_traces_concrete_js/1,
+    populate_plt_never_traces_unreachable_command/1,
+    bundle_with_io_format_in_command_compiles/1
 ]).
 
 all() ->
@@ -28,7 +30,9 @@ groups() ->
         no_layout_discovers_page_only,
         bundle_digest_is_deterministic,
         bundle_digest_reflects_template_file_changes,
-        populate_plt_never_traces_concrete_js
+        populate_plt_never_traces_concrete_js,
+        populate_plt_never_traces_unreachable_command,
+        bundle_with_io_format_in_command_compiles
     ]}].
 
 discovers_embedded_component(_Config) ->
@@ -98,3 +102,45 @@ populate_plt_never_traces_concrete_js(_Config) ->
     %% action/3), so "nothing got cached" isn't just an artifact of the
     %% walk never running.
     {ok, _} = concrete_plt:get(PLT, {fixture_js_action_page, action, 3}).
+
+%% Regression test for command/3 no longer being a call-graph root
+%% (concrete_call_graph:page_entries/2). fixture_io_command_page has a
+%% real action/3 and a real command/3, and nothing in action/3 calls
+%% command/3 -- so command/3 is only reachable the way a browser
+%% actually reaches it: over HTTP/WebSocket to the real BEAM function,
+%% never through the JS-bundle call graph.
+%%
+%% Note this is NOT about PLT presence: populate_mfa/2's caching is
+%% coarse-grained by design (populating one MFA of a module caches that
+%% whole module's IR, see populate_plt/2's own comment), so
+%% command/3 legitimately ends up in the PLT once action/3 does --
+%% same as concrete_js's *would* have, if extract_ir/1 didn't refuse it
+%% outright at a different layer. What actually decides whether
+%% command/3's body reaches the JS encoder is reachable/1, built from
+%% page_entries/2's roots -- that's what this test (and
+%% bundle_with_io_format_in_command_compiles below) actually checks.
+populate_plt_never_traces_unreachable_command(_Config) ->
+    PLT = concrete_plt:new(),
+    ok = rebar_compiler_concrete:populate_plt(PLT, [fixture_io_command_page]),
+    {ok, _} = concrete_plt:get(PLT, {fixture_io_command_page, action, 3}),
+    Entries   = concrete_call_graph:page_entries(fixture_io_command_page, PLT),
+    Graph     = concrete_call_graph:build_from_entries(Entries, PLT),
+    Reachable = concrete_call_graph:reachable(Graph),
+    true  = lists:member({fixture_io_command_page, action, 3}, Reachable),
+    false = lists:member({fixture_io_command_page, command, 3}, Reachable).
+
+%% The actual regression this whole fix is for: before command/3 was
+%% excluded from page_entries/2, encoding a bundle for a page whose
+%% command/3 calls io:format/2 would crash concrete_encoder trying to
+%% compile io:format/2's own IR into JS -- even though command/3 only
+%% ever runs server-side. With command/3 no longer a root, the bundle
+%% encodes cleanly and command/3's body never gets anywhere near the
+%% encoder.
+bundle_with_io_format_in_command_compiles(_Config) ->
+    PLT = concrete_plt:new(),
+    ok = rebar_compiler_concrete:populate_plt(PLT, [fixture_io_command_page]),
+    Entries = concrete_call_graph:page_entries(fixture_io_command_page, PLT),
+    Graph   = concrete_call_graph:build_from_entries(Entries, PLT),
+    Bundle  = concrete_encoder:encode_bundle(Graph, PLT),
+    true = is_binary(Bundle),
+    true = byte_size(Bundle) > 0.

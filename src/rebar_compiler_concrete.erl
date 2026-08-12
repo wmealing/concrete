@@ -191,7 +191,8 @@ module_digest(Module) ->
 %% two passes, because population is coarse-grained (caching one MFA of
 %% a module pulls in that module's whole function set, see
 %% populate_mfa/2) but page_entries/2 needs the PLT already populated to
-%% correctly detect whether a module exports action/3 or command/3.
+%% correctly detect whether a module exports action/3 (command/3 is
+%% never a root -- see concrete_call_graph:page_entries/2).
 %% Pass 1 seeds the PLT with each entry module's own code via one known
 %% MFA (template/0, always exported). Pass 2 does a real graph walk from
 %% every entry module's real entry points -- now resolvable -- and
