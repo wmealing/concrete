@@ -379,6 +379,63 @@ call is compiled Erlang reaching the CDN-loaded library through
 `src/concrete_js.erl` for the full reference (including the project-local
 `?js` shorthand macro).
 
+`concrete_js` is itself a real Erlang module (its functions have
+harmless pass-through bodies like `call(_Receiver, _Method, _Args) ->
+undefined.`, so code that calls it still runs inertly if it's ever
+executed on the real BEAM instead of compiled). It's tagged
+`-concrete([{bif_module, true}])`, which tells
+`concrete_beam_reader:extract_ir/1` to never trace into it — without
+that tag, the call graph would treat `concrete_js` as an ordinary
+dependency, compile its pass-through bodies into the bundle, and
+register them under the exact same `Erlang["concrete_js:Fun/Arity"]`
+keys the real, hand-written native BIFs in `runtime.js` use, silently
+overwriting them (every `?js:call` would then compile and run without
+error, but do nothing). Any other module fronting a hand-written native
+BIF needs the same attribute; `runtime.js`'s `defineErlangFunction`
+also refuses outright — with a clear error — if something ever tries to
+register a compiled definition over an existing native BIF key.
+
+### Reporting to the server from a client-side action
+
+`concrete_js:call/3` can reach back into `client.js`'s own API, not
+just third-party JS — in particular `Client.dispatchCommand/2`, which
+POSTs to `/concrete/command` and runs `Module:command/3` server-side.
+That gives a client-side `action/3` a fire-and-forget way to tell the
+server what just happened, still written entirely in Erlang:
+
+```erlang
+-include_lib("concrete/include/concrete_js.hrl").
+
+%% Compiled to JS, runs in the browser -- the count update itself never
+%% waits on the network.
+action(increment, _Params, #{state := #{count := N} = S} = C) ->
+    NewCount = N + 1,
+    ?js:call(<<"Client">>, dispatchCommand,
+             [<<"report_count">>, #{count => NewCount}]),
+    C#{state => S#{count := NewCount}}.
+
+%% Runs server-side, dispatched by concrete_command_handler in response
+%% to that POST. Params arrives as a plain (non-wire-tagged) map, since
+%% concrete_command_handler hands it straight to command/3 with no
+%% decode step.
+command(report_count, Params, Server) ->
+    io:format("counter is now: ~p~n", [Params]),
+    Server.
+```
+
+Unlike `action/3`, `command/3` is never a JS-bundle compile root (see
+`concrete_call_graph:page_entries/2`) — every dispatch path that
+reaches it (`concrete_command_handler` over HTTP,
+`concrete_ws_handler` over a WebSocket) calls it as an ordinary Erlang
+function on the real BEAM, never as compiled JS. So its body is
+ordinary, unrestricted Erlang: `io:format/2`, `logger:*`,
+`gen_server:call`, spawning processes, whatever the task needs. (It
+will still get traced and compiled if something in the actually
+browser-reachable graph — an `action/3` clause, say — calls it
+directly as a plain in-process function; unusual, since it defeats the
+point of `command/3` being server-only, but legal Erlang, so the call
+graph still follows it there.)
+
 ## Dead-code elimination and bundling
 
 `concrete_demo:bundle().` demonstrates the full build pipeline:
