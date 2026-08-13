@@ -17,8 +17,17 @@
 %% Known v1 limitations: a literal `{` in text must be written as an
 %% expression ({<<"{">>}), and `@word` sequences inside string literals
 %% within expressions are also rewritten.
+%% Tells concrete_beam_reader:extract_ir/1 to refuse to trace into this
+%% module. It's compiler-internal code -- a hand-rolled recursive-descent
+%% parser full of raw character-literal patterns concrete_transformer/
+%% concrete_encoder were never written to handle -- never meant to run
+%% client-side. Without this tag, a template/0 using the documented
+%% {inline, concrete_template_parser:parse_string(...)} pattern makes
+%% this module a real call-graph compile root the moment its layout/page
+%% is actually reachable, and the encoder chokes on its own source.
 -module(concrete_template_parser).
 -include("concrete_ir.hrl").
+-concrete([{compiler_internal, true}]).
 
 -export([parse_file/1, parse_string/1, compile_render_fun/1, is_void_element/1,
          component_modules/1]).

@@ -75,7 +75,20 @@ walk([MFA | Rest], G, PLT, Visited) ->
             digraph:add_vertex(G, MFA),
             case concrete_plt:get(PLT, MFA) of
                 {ok, FunDef} ->
-                    Callees = collect_calls(MFA, FunDef),
+                    %% Callees runtime.js already hand-writes as native
+                    %% BIFs (maps:get/3, lists:reverse/1, ...) are
+                    %% deliberately dropped here rather than added to
+                    %% the graph: their real stdlib source would trace
+                    %% cleanly (unlike a compiler_internal module) but
+                    %% compiling it would collide with the existing
+                    %% native runtime.js definition under the same
+                    %% Erlang["Mod:Fun/Arity"] key. Every ir_remote_call
+                    %% site still emits a plain Erlang["Mod:Fun/Arity"]
+                    %% reference regardless of whether that MFA is
+                    %% bundled, so skipping it here is safe -- the
+                    %% native implementation is used either way.
+                    Callees = [C || C <- collect_calls(MFA, FunDef),
+                                     not concrete_native_bifs:is_native(C)],
                     [begin
                          digraph:add_vertex(G, Callee),
                          digraph:add_edge(G, MFA, Callee)

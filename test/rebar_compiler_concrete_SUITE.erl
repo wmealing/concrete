@@ -15,7 +15,11 @@
     bundle_digest_reflects_template_file_changes/1,
     populate_plt_never_traces_concrete_js/1,
     populate_plt_never_traces_unreachable_command/1,
-    bundle_with_io_format_in_command_compiles/1
+    bundle_with_io_format_in_command_compiles/1,
+    bundle_with_inline_layout_template_compiles/1,
+    bundle_never_traces_compiler_internal_modules/1,
+    bundle_with_maps_get_in_init_compiles/1,
+    bundle_never_emits_native_bif_definitions/1
 ]).
 
 all() ->
@@ -32,7 +36,11 @@ groups() ->
         bundle_digest_reflects_template_file_changes,
         populate_plt_never_traces_concrete_js,
         populate_plt_never_traces_unreachable_command,
-        bundle_with_io_format_in_command_compiles
+        bundle_with_io_format_in_command_compiles,
+        bundle_with_inline_layout_template_compiles,
+        bundle_never_traces_compiler_internal_modules,
+        bundle_with_maps_get_in_init_compiles,
+        bundle_never_emits_native_bif_definitions
     ]}].
 
 discovers_embedded_component(_Config) ->
@@ -144,3 +152,65 @@ bundle_with_io_format_in_command_compiles(_Config) ->
     Bundle  = concrete_encoder:encode_bundle(Graph, PLT),
     true = is_binary(Bundle),
     true = byte_size(Bundle) > 0.
+
+%% Two more call-graph-root bugs, same family as populate_plt_never_traces_concrete_js
+%% above. fixture_layout_page/fixture_layout is the exact real-pipeline
+%% shape rebar_compiler_concrete:discover_modules/2 produces for a page
+%% with a declared layout: both modules' template/0 uses the documented
+%% {inline, concrete_template_parser:parse_string(...)} pattern, and
+%% fixture_layout's init/2 uses maps:get/3. discovers_page_layout/1
+%% above only exercises discover_modules/2, which never calls
+%% encode_bundle/2 -- so it never hit either bug. These do, through the
+%% real populate_plt/2 -> build_from_entries/2 -> encode_bundle/2 path.
+layout_bundle(_Config) ->
+    Modules = [fixture_layout_page, fixture_layout],
+    PLT = concrete_plt:new(),
+    ok = rebar_compiler_concrete:populate_plt(PLT, Modules),
+    Entries = lists:flatmap(fun(Mod) -> concrete_call_graph:page_entries(Mod, PLT) end, Modules),
+    Graph   = concrete_call_graph:build_from_entries(Entries, PLT),
+    {Graph, PLT}.
+
+%% Bug 1: template/0 calling concrete_template_parser:parse_string/1
+%% used to crash concrete_encoder with {unhandled_ast_node, ...} trying
+%% to compile the parser's own character-literal-heavy source. With
+%% concrete_template_parser tagged compiler_internal, it's never traced
+%% and the bundle just encodes without it.
+bundle_with_inline_layout_template_compiles(_Config) ->
+    {Graph, PLT} = layout_bundle(_Config),
+    Bundle = concrete_encoder:encode_bundle(Graph, PLT),
+    true = is_binary(Bundle),
+    true = byte_size(Bundle) > 0.
+
+%% concrete_template_parser:parse_string/1 (called from both fixtures'
+%% template/0) is reachable -- it's a genuine callee -- but must never
+%% get populated into the PLT with its real (untraceable) source, since
+%% concrete_beam_reader:extract_ir/1 refuses to trace a compiler_internal
+%% module. encode_mfa/3 then emits nothing for it instead of crashing.
+bundle_never_traces_compiler_internal_modules(_Config) ->
+    {Graph, PLT} = layout_bundle(_Config),
+    Reachable = concrete_call_graph:reachable(Graph),
+    true = lists:member({concrete_template_parser, parse_string, 1}, Reachable),
+    not_found = concrete_plt:get(PLT, {concrete_template_parser, parse_string, 1}).
+
+%% Bug 2: init/2 calling maps:get/3 used to compile clean but throw at
+%% first client-side use ("Refusing to overwrite native BIF
+%% Erlang[\"maps:get/3\"]..."), because maps:get/3 has real,
+%% debug_info-compiled stdlib source that traced and compiled cleanly,
+%% clobbering the hand-written native BIF's runtime.js key. With
+%% concrete_native_bifs filtering it out of the call graph, the bundle
+%% still compiles clean.
+bundle_with_maps_get_in_init_compiles(_Config) ->
+    {Graph, PLT} = layout_bundle(_Config),
+    Bundle = concrete_encoder:encode_bundle(Graph, PLT),
+    true = is_binary(Bundle),
+    true = byte_size(Bundle) > 0.
+
+%% The actual regression: the bundle must never contain a compiled
+%% definition for maps:get/3 (or any other native-shadowed MFA) that
+%% would clobber runtime.js's hand-written version at load time.
+bundle_never_emits_native_bif_definitions(_Config) ->
+    {Graph, PLT} = layout_bundle(_Config),
+    Reachable = concrete_call_graph:reachable(Graph),
+    false = lists:member({maps, get, 3}, Reachable),
+    Bundle = concrete_encoder:encode_bundle(Graph, PLT),
+    nomatch = binary:match(Bundle, <<"defineErlangFunction(\"maps\"">>).

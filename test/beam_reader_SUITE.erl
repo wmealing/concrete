@@ -12,7 +12,10 @@
     extracted_module_has_definitions/1,
     extracted_definition_names_are_atoms/1,
     bif_module_is_refused/1,
-    concrete_js_is_refused/1
+    concrete_js_is_refused/1,
+    compiler_internal_is_refused/1,
+    concrete_template_parser_is_refused/1,
+    concrete_transformer_is_refused/1
 ]).
 
 all() ->
@@ -27,7 +30,10 @@ groups() ->
         extracted_module_has_definitions,
         extracted_definition_names_are_atoms,
         bif_module_is_refused,
-        concrete_js_is_refused
+        concrete_js_is_refused,
+        compiler_internal_is_refused,
+        concrete_template_parser_is_refused,
+        concrete_transformer_is_refused
     ]}].
 %% The `lists` module is always compiled with debug_info in OTP.
 extract_stdlib_module(_Config) ->
@@ -63,3 +69,23 @@ bif_module_is_refused(_Config) ->
 %% attribute -- confirm it's refused too, not just the fixture.
 concrete_js_is_refused(_Config) ->
     {error, bif_module} = concrete_beam_reader:extract_ir(concrete_js).
+
+%% Same as bif_module_is_refused, but for -concrete([{compiler_internal,
+%% true}]) -- modules that are real, traceable application code but
+%% never meant to be called from a compile root (concrete's own AST
+%% parser/transformer), as distinct from a module fronting a native
+%% runtime.js BIF.
+compiler_internal_is_refused(_Config) ->
+    {error, compiler_internal} = concrete_beam_reader:extract_ir(fixture_compiler_internal).
+
+%% concrete_template_parser is real production code carrying the same
+%% attribute -- confirm it's refused too, not just the fixture. Regression
+%% test: a template/0 using the documented {inline,
+%% concrete_template_parser:parse_string(...)} pattern used to make this
+%% module a real call-graph compile root and crash the encoder on its
+%% own character-literal-heavy source.
+concrete_template_parser_is_refused(_Config) ->
+    {error, compiler_internal} = concrete_beam_reader:extract_ir(concrete_template_parser).
+
+concrete_transformer_is_refused(_Config) ->
+    {error, compiler_internal} = concrete_beam_reader:extract_ir(concrete_transformer).

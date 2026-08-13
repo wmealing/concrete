@@ -1,6 +1,12 @@
 %% Transforms Erlang erl_parse AST into Concrete IR records.
+%%
+%% Tagged compiler_internal for the same reason
+%% concrete_template_parser is: it's the compiler's own AST walker, not
+%% something meant to be called from a compile root, and its own source
+%% is not something concrete_encoder can compile into JS.
 -module(concrete_transformer).
 -include("concrete_ir.hrl").
+-concrete([{compiler_internal, true}]).
 
 -export([transform_module/2, transform_expr/2, transform_clause/2, new_ctx/1]).
 
