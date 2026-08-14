@@ -16,8 +16,20 @@ init(_Params, Server) ->
              #{id => <<"3">>, label => <<"Ship it">>}],
     {#{state => #{tasks => Tasks, next_id => 4}}, Server}.
 
+%% Reads whatever the user typed into #new-task-text at the moment the
+%% button is clicked (dom:get_value/1, the same BIF todo_app.erl's
+%% add_todo/0 uses) -- action/3 is a compiled JS bundle entry point, so
+%% it can call dom:* directly, no server round trip. An empty field
+%% falls back to the old auto-generated label rather than adding a
+%% blank task.
 action(add_task, _Params, #{state := #{tasks := Tasks, next_id := N} = S} = C) ->
-    NewTask = #{id => integer_to_binary(N), label => <<"Task ", (integer_to_binary(N))/binary>>},
+    Typed = dom:get_value(<<"new-task-text">>),
+    Label = case byte_size(Typed) > 0 of
+        true  -> Typed;
+        false -> <<"Task ", (integer_to_binary(N))/binary>>
+    end,
+    NewTask = #{id => integer_to_binary(N), label => Label},
+    dom:set_value(<<"new-task-text">>, <<"">>),
     C#{state => S#{tasks => Tasks ++ [NewTask], next_id => N + 1}};
 action(complete_task, _Params, #{state := #{tasks := Tasks} = S} = C) ->
     Remaining = case Tasks of [] -> []; [_ | Rest] -> Rest end,
@@ -33,6 +45,7 @@ template() ->
         "id={maps:get(id, T)} label={maps:get(label, T)} />"
         "</:for>"
         "</ul>"
+        "<input id=\"new-task-text\" type=\"text\" placeholder=\"Task description\" />"
         "<button concrete-click=\"add_task\">Add task</button>"
         "<button concrete-click=\"complete_task\">Complete oldest</button>"
         "</div>")}.
