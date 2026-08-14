@@ -7,6 +7,10 @@
 %%                                        it reads from component state
 %%   <button concrete-click="incr">       event attributes pass through
 %%   <:component module={mod} k={v} />    embedded child component
+%%   <:component module={mod} key={k} />  keyed instance (list-rendered components)
+%%   <:for item="X" in={@items}>...</:for>  repeat body once per list element,
+%%                                          binding the Erlang variable named
+%%                                          by `item` (e.g. {X}) inside it
 %%   <slot />                             layout placeholder for page/child content
 %%
 %% `@name` is rewritten to `maps:get(name, CONCRETE_STATE)` before the
@@ -36,10 +40,14 @@
     {element, binary(), [attr()], [dom_node()]}
   | {text, binary()}
   | {expr, erl_parse:abstract_expr()}
-  | {component, module(), [{atom(), binary() | {expr, erl_parse:abstract_expr()}}]}
+  | {component, module(), key(), [{atom(), binary() | {expr, erl_parse:abstract_expr()}}]}
+  | {for, atom(), erl_parse:abstract_expr(), [dom_node()]}
   | slot.
 
 -type attr() :: {binary(), binary() | {expr, erl_parse:abstract_expr()}}.
+
+%% `undefined` means the tag had no `key` prop -- the singleton case.
+-type key() :: undefined | binary() | {expr, erl_parse:abstract_expr()}.
 
 -export_type([dom_node/0, attr/0]).
 
@@ -65,6 +73,9 @@ parse_nodes("</" ++ _ = Cs, Acc) ->
     {lists:reverse(Acc), Cs};
 parse_nodes("<:component" ++ Cs, Acc) ->
     {Node, Rest} = parse_component(Cs),
+    parse_nodes(Rest, [Node | Acc]);
+parse_nodes("<:for" ++ Cs, Acc) ->
+    {Node, Rest} = parse_for(Cs),
     parse_nodes(Rest, [Node | Acc]);
 parse_nodes("<slot" ++ Cs, Acc) when hd(Cs) =:= $\s; hd(Cs) =:= $/ ->
     Rest = parse_slot(Cs),
@@ -166,6 +177,9 @@ parse_slot(Cs) ->
 
 %% --- Components ---
 
+%% `module` and `key` are reserved props: identity/routing metadata,
+%% not part of the child's own Props map -- both stripped out here
+%% before what's left is treated as ordinary props, same handling.
 parse_component(Cs) ->
     {Attrs, Cs1} = parse_attrs(Cs, []),
     Rest = case Cs1 of
@@ -174,8 +188,12 @@ parse_component(Cs) ->
     end,
     Props0 = [{binary_to_atom(N), V} || {N, V} <- Attrs],
     case lists:keytake(module, 1, Props0) of
-        {value, {module, ModVal}, Props} ->
-            {{component, module_value(ModVal), Props}, Rest};
+        {value, {module, ModVal}, Props1} ->
+            {KeyVal, Props} = case lists:keytake(key, 1, Props1) of
+                {value, {key, KV}, P} -> {KV, P};
+                false                 -> {undefined, Props1}
+            end,
+            {{component, module_value(ModVal), KeyVal, Props}, Rest};
         false ->
             error({parse_error, component_missing_module})
     end.
@@ -183,6 +201,51 @@ parse_component(Cs) ->
 module_value({expr, {atom, _, M}})   -> M;
 module_value(Bin) when is_binary(Bin) -> binary_to_atom(Bin);
 module_value(Other)                   -> error({parse_error, {bad_module_prop, Other}}).
+
+%% --- Loops ---
+
+%% <:for item="X" in={ListExpr}>Body</:for> -- repeats Body once per
+%% element of ListExpr, evaluated once (not per iteration); `item`
+%% names the Erlang variable (a literal identifier, not an expression --
+%% it's a binding site, not a value) that Body's own {X} expressions
+%% read the current element from. Always a block form (no self-closing
+%% shorthand -- an empty loop body is never useful) so parsing continues
+%% into ordinary parse_nodes/2 for the children, then expects the
+%% matching </:for>.
+parse_for(Cs) ->
+    {Attrs, Cs1} = parse_attrs(Cs, []),
+    case Cs1 of
+        ">" ++ Rest0 ->
+            ItemVar = for_item_var(Attrs),
+            ListAST = for_in_expr(Attrs),
+            {Children, Rest1} = parse_nodes(Rest0, []),
+            Rest2 = expect_close_for(Rest1),
+            {{for, ItemVar, ListAST, Children}, Rest2};
+        "/>" ++ _ ->
+            error({parse_error, for_requires_body})
+    end.
+
+for_item_var(Attrs) ->
+    case lists:keyfind(<<"item">>, 1, Attrs) of
+        {<<"item">>, Bin} when is_binary(Bin) -> binary_to_atom(Bin);
+        {<<"item">>, _}                       -> error({parse_error, for_item_must_be_literal});
+        false                                 -> error({parse_error, for_missing_item})
+    end.
+
+for_in_expr(Attrs) ->
+    case lists:keyfind(<<"in">>, 1, Attrs) of
+        {<<"in">>, {expr, AST}} -> AST;
+        {<<"in">>, _}           -> error({parse_error, for_in_must_be_expr});
+        false                   -> error({parse_error, for_missing_in})
+    end.
+
+expect_close_for("</:for" ++ Cs) ->
+    case skip_ws(Cs) of
+        ">" ++ Rest -> Rest;
+        Other       -> error({parse_error, {expected_close_bracket, Other}})
+    end;
+expect_close_for(Cs) ->
+    error({parse_error, {missing_close_tag, 'for', Cs}}).
 
 %% --- Expressions ---
 
@@ -239,9 +302,11 @@ component_modules(Nodes) ->
 
 component_modules([], Acc) ->
     Acc;
-component_modules([{component, Module, _Props} | Rest], Acc) ->
+component_modules([{component, Module, _Key, _Props} | Rest], Acc) ->
     component_modules(Rest, [Module | Acc]);
 component_modules([{element, _Tag, _Attrs, Children} | Rest], Acc) ->
+    component_modules(Rest, component_modules(Children, Acc));
+component_modules([{for, _Var, _ListAST, Children} | Rest], Acc) ->
     component_modules(Rest, component_modules(Children, Acc));
 component_modules([_ | Rest], Acc) ->
     component_modules(Rest, Acc).
@@ -255,38 +320,77 @@ component_modules([_ | Rest], Acc) ->
 %% concrete_encoder:encode_function_def(Module, FunDef).
 -spec compile_render_fun([dom_node()]) -> #ir_function_def{}.
 compile_render_fun(Nodes) ->
+    {IR, _NextPathIndex} = dom_ir_list(Nodes, 0),
     #ir_function_def{
         name   = render,
         arity  = 1,
         clauses = [#ir_clause{
             patterns = [#ir_variable{name = 'CONCRETE_STATE'}],
             guards   = [],
-            body     = [dom_ir_list(Nodes)]
+            body     = [IR]
         }]
     }.
 
-dom_ir_list(Nodes) ->
-    #ir_list{elements = [dom_ir(N) || N <- Nodes], tail = nil}.
+%% PathIndex is a depth-first counter over <:component> occurrences
+%% only, assigned once here at compile time (the template is fixed
+%% across renders, so the same tag always gets the same index) --
+%% baked into the compiled DOM as a literal integer, alongside the
+%% explicit `key` (if any), so the client runtime can tell "same call
+%% site, evaluated again" apart from "different call site" without
+%% re-deriving tree position at runtime.
+dom_ir_list(Nodes, PathIndex0) ->
+    {ElementsRev, PathIndexN} =
+        lists:foldl(fun(N, {Acc, PI0}) ->
+            {IR, PI1} = dom_ir(N, PI0),
+            {[IR | Acc], PI1}
+        end, {[], PathIndex0}, Nodes),
+    {#ir_list{elements = lists:reverse(ElementsRev), tail = nil}, PathIndexN}.
 
-dom_ir({text, Bin}) ->
-    #ir_tuple{elements = [#ir_atom{value = text}, #ir_string{value = Bin}]};
-dom_ir({expr, AST}) ->
-    #ir_tuple{elements = [#ir_atom{value = expr}, expr_ir(AST)]};
-dom_ir({element, Tag, Attrs, Children}) ->
-    #ir_tuple{elements = [
+dom_ir({text, Bin}, PathIndex) ->
+    {#ir_tuple{elements = [#ir_atom{value = text}, #ir_string{value = Bin}]}, PathIndex};
+dom_ir({expr, AST}, PathIndex) ->
+    {#ir_tuple{elements = [#ir_atom{value = expr}, expr_ir(AST)]}, PathIndex};
+dom_ir({element, Tag, Attrs, Children}, PathIndex0) ->
+    {ChildrenIR, PathIndex1} = dom_ir_list(Children, PathIndex0),
+    {#ir_tuple{elements = [
         #ir_atom{value = element},
         #ir_string{value = Tag},
         #ir_list{elements = [attr_ir(A) || A <- Attrs], tail = nil},
-        dom_ir_list(Children)
-    ]};
-dom_ir(slot) ->
-    #ir_tuple{elements = [#ir_atom{value = slot}]};
-dom_ir({component, Module, Props}) ->
-    #ir_tuple{elements = [
+        ChildrenIR
+    ]}, PathIndex1};
+dom_ir(slot, PathIndex) ->
+    {#ir_tuple{elements = [#ir_atom{value = slot}]}, PathIndex};
+%% Body is compiled once, not once per iteration -- every <:component>
+%% inside a <:for> body therefore shares a single path index across all
+%% iterations of the loop, which is exactly why an explicit `key` (see
+%% the component-mount plan) is required to tell those iterations'
+%% instances apart; the path index alone can't. At runtime this becomes
+%% an ir_lc (list comprehension) whose template is the body's own
+%% #ir_list{} -- i.e. a list of per-iteration node-lists, one level more
+%% nested than a plain sibling run of nodes. client.js's buildVNode and
+%% the server-side renderer both splice a nested list transparently
+%% (see resolveComponentDom's sibling comment / concrete_renderer),
+%% exactly the same way a <:component>'s own multi-node output already
+%% does, so no other encoder or runtime change is needed for this to
+%% render correctly.
+dom_ir({for, VarName, ListAST, Children}, PathIndex0) ->
+    {ChildrenIR, PathIndex1} = dom_ir_list(Children, PathIndex0),
+    {#ir_lc{
+        template = ChildrenIR,
+        qualifiers = [#ir_lc_gen{pattern = #ir_variable{name = VarName}, expr = expr_ir(ListAST)}]
+    }, PathIndex1};
+dom_ir({component, Module, Key, Props}, PathIndex) ->
+    {#ir_tuple{elements = [
         #ir_atom{value = component},
         #ir_atom{value = Module},
-        #ir_list{elements = [prop_ir(P) || P <- Props], tail = nil}
-    ]}.
+        #ir_list{elements = [prop_ir(P) || P <- Props], tail = nil},
+        key_ir(Key),
+        #ir_integer{value = PathIndex}
+    ]}, PathIndex + 1}.
+
+key_ir(undefined)             -> #ir_atom{value = undefined};
+key_ir({expr, AST})           -> expr_ir(AST);
+key_ir(Bin) when is_binary(Bin) -> #ir_string{value = Bin}.
 
 attr_ir({Name, {expr, AST}}) ->
     #ir_tuple{elements = [#ir_string{value = Name}, expr_ir(AST)]};

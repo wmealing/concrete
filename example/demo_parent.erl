@@ -45,7 +45,12 @@ demos() ->
      #{id => spirograph, title => <<"three.js Spirograph">>, port => 8773, module => spirograph_demo,
        desc => <<"A rotating, color-cycling spirograph drawn with three.js, loaded from a CDN "
                  "&lt;script&gt; tag -- every THREE.* call is compiled Erlang, reaching the "
-                 "library through concrete_js, with no hand-written JavaScript at all.">>}
+                 "library through concrete_js, with no hand-written JavaScript at all.">>},
+     #{id => task_board, title => <<"Task Board (component mount + &lt;:for&gt;)">>, port => 8774,
+       module => task_board_demo,
+       desc => <<"A keyed, dynamic list of stateful child components rendered with &lt;:for&gt; -- "
+                 "each task keeps its own persisted state across every re-render, and its "
+                 "mount/2 fires exactly once, the moment it first appears.">>}
     ].
 
 %% Build + start every demo's own cowboy listener, then serve the

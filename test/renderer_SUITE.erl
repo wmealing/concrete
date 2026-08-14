@@ -12,6 +12,8 @@
     render_escapes_values/1,
     render_void_element/1,
     render_component/1,
+    render_for_loop/1,
+    render_for_loop_keeps_state_visible/1,
     render_page_from_file/1,
     render_wrap_in_layout/1,
     render_no_layout_passthrough/1,
@@ -31,6 +33,8 @@ groups() ->
      render_escapes_values,
      render_void_element,
      render_component,
+     render_for_loop,
+     render_for_loop_keeps_state_visible,
      render_page_from_file,
      render_wrap_in_layout,
      render_no_layout_passthrough,
@@ -74,6 +78,18 @@ render_void_element(_Config) ->
 render_component(_Config) ->
     <<"<span class=\"badge\">50</span>">> =
         render("<:component module={fixture_badge} score={@n} />", #{n => 5}).
+
+render_for_loop(_Config) ->
+    <<"<li>a</li><li>b</li><li>c</li>">> =
+        render("<:for item=\"X\" in={@items}><li>{X}</li></:for>",
+               #{items => [<<"a">>, <<"b">>, <<"c">>]}).
+
+%% A loop body can read @state fields alongside its own loop variable --
+%% ExtraBindings adds to erl_eval's bindings, it doesn't replace them.
+render_for_loop_keeps_state_visible(_Config) ->
+    <<"<li>x:1</li><li>x:2</li>">> =
+        render("<:for item=\"N\" in={@ns}><li>{@label}:{N}</li></:for>",
+               #{ns => [1, 2], label => <<"x">>}).
 
 render_page_from_file(_Config) ->
     {HTML, StateJSON, _Server} = concrete_renderer:render_page(fixture_page, #{}),

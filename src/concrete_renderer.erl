@@ -73,57 +73,75 @@ template_path(File) ->
 
 -spec render_nodes([concrete_template_parser:dom_node()], map()) -> iodata().
 render_nodes(Nodes, Component) ->
-    render_nodes(Nodes, Component, no_slot).
+    render_nodes(Nodes, Component, no_slot, #{}).
 
 -spec render_node(concrete_template_parser:dom_node(), map()) -> iodata().
 render_node(Node, Component) ->
-    render_node(Node, Component, no_slot).
+    render_node(Node, Component, no_slot, #{}).
 
 %% SlotContent is the already-rendered HTML a <slot /> node is replaced
 %% with -- only meaningful while rendering a layout template via
 %% wrap_in_layout/2. Elsewhere (plain pages/components) it's `no_slot`,
 %% and a stray <slot /> is a template error.
 render_nodes(Nodes, Component, SlotContent) ->
-    [render_node(N, Component, SlotContent) || N <- Nodes].
+    render_nodes(Nodes, Component, SlotContent, #{}).
 
-render_node({element, Tag, Attrs, Children}, Component, SlotContent) ->
-    RenderedAttrs = [render_attr(A, Component) || A <- Attrs],
+%% ExtraBindings holds variables a <:for> loop bound for the body it's
+%% currently expanding (see the {for, ...} clause below) -- on top of
+%% CONCRETE_STATE, not instead of it, so a loop body can still read
+%% @state fields alongside its own loop variable. Empty everywhere else.
+render_nodes(Nodes, Component, SlotContent, ExtraBindings) ->
+    [render_node(N, Component, SlotContent, ExtraBindings) || N <- Nodes].
+
+render_node({element, Tag, Attrs, Children}, Component, SlotContent, ExtraBindings) ->
+    RenderedAttrs = [render_attr(A, Component, ExtraBindings) || A <- Attrs],
     case concrete_template_parser:is_void_element(Tag) of
         true ->
             [<<"<">>, Tag, RenderedAttrs, <<">">>];
         false ->
             [<<"<">>, Tag, RenderedAttrs, <<">">>,
-             render_nodes(Children, Component, SlotContent),
+             render_nodes(Children, Component, SlotContent, ExtraBindings),
              <<"</">>, Tag, <<">">>]
     end;
-render_node({text, Text}, _Component, _SlotContent) ->
+render_node({text, Text}, _Component, _SlotContent, _ExtraBindings) ->
     Text;
-render_node({expr, AST}, Component, _SlotContent) ->
-    escape(term_to_iodata(eval_expr(AST, Component)));
-render_node({component, Module, Props}, Component, _SlotContent) ->
-    ResolvedProps = resolve_props(Props, Component),
+render_node({expr, AST}, Component, _SlotContent, ExtraBindings) ->
+    escape(term_to_iodata(eval_expr(AST, Component, ExtraBindings)));
+render_node({component, Module, _Key, Props}, Component, _SlotContent, ExtraBindings) ->
+    %% Key is purely client-side render-instance identity (see
+    %% concrete_template_parser); server-side rendering has no
+    %% persistent instances to key against, so it's ignored here.
+    ResolvedProps = resolve_props(Props, Component, ExtraBindings),
     {Child, _Server} = Module:init(ResolvedProps, #{}),
-    render_nodes(template_dom(Module), Child);
-render_node(slot, _Component, no_slot) ->
+    %% A child component's own template starts a fresh binding scope --
+    %% it can't see its parent's loop variable(s), matching how it
+    %% already can't see the parent's CONCRETE_STATE either.
+    render_nodes(template_dom(Module), Child, no_slot, #{});
+render_node({for, Var, ListAST, Children}, Component, SlotContent, ExtraBindings) ->
+    List = eval_expr(ListAST, Component, ExtraBindings),
+    [render_nodes(Children, Component, SlotContent, ExtraBindings#{Var => Item})
+     || Item <- List];
+render_node(slot, _Component, no_slot, _ExtraBindings) ->
     error({render_error, slot_outside_layout});
-render_node(slot, _Component, SlotContent) ->
+render_node(slot, _Component, SlotContent, _ExtraBindings) ->
     SlotContent.
 
-render_attr({Name, {expr, AST}}, Component) ->
-    Val = escape(term_to_iodata(eval_expr(AST, Component))),
+render_attr({Name, {expr, AST}}, Component, ExtraBindings) ->
+    Val = escape(term_to_iodata(eval_expr(AST, Component, ExtraBindings))),
     [<<" ">>, Name, <<"=\"">>, Val, <<"\"">>];
-render_attr({Name, Value}, _Component) ->
+render_attr({Name, Value}, _Component, _ExtraBindings) ->
     [<<" ">>, Name, <<"=\"">>, Value, <<"\"">>].
 
-resolve_props(Props, Component) ->
-    maps:from_list([{K, eval_prop(V, Component)} || {K, V} <- Props]).
+resolve_props(Props, Component, ExtraBindings) ->
+    maps:from_list([{K, eval_prop(V, Component, ExtraBindings)} || {K, V} <- Props]).
 
-eval_prop({expr, AST}, Component) -> eval_expr(AST, Component);
-eval_prop(Val, _Component)        -> Val.
+eval_prop({expr, AST}, Component, ExtraBindings) -> eval_expr(AST, Component, ExtraBindings);
+eval_prop(Val, _Component, _ExtraBindings)       -> Val.
 
-eval_expr(AST, Component) ->
+eval_expr(AST, Component, ExtraBindings) ->
     State = maps:get(state, Component, #{}),
-    Bindings = erl_eval:add_binding('CONCRETE_STATE', State, erl_eval:new_bindings()),
+    Bindings0 = erl_eval:add_binding('CONCRETE_STATE', State, erl_eval:new_bindings()),
+    Bindings = maps:fold(fun erl_eval:add_binding/3, Bindings0, ExtraBindings),
     {value, Val, _} = erl_eval:expr(AST, Bindings),
     Val.
 

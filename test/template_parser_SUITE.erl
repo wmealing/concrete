@@ -10,6 +10,7 @@
     parse_state_interpolation/1,
     parse_nested_elements/1,
     parse_component_tag/1,
+    parse_component_key_prop/1,
     parse_empty_element/1,
     parse_void_element_without_slash/1,
     parse_event_and_bare_attrs/1,
@@ -17,6 +18,7 @@
     parse_expr_arithmetic/1,
     parse_mixed_content/1,
     parse_component_string_prop/1,
+    parse_for_loop/1,
     parse_multiline_template/1,
     parse_slot_tag/1,
     compile_render_fun_js/1
@@ -33,6 +35,7 @@ groups() ->
      parse_state_interpolation,
      parse_nested_elements,
      parse_component_tag,
+     parse_component_key_prop,
      parse_empty_element,
      parse_void_element_without_slash,
      parse_event_and_bare_attrs,
@@ -40,6 +43,7 @@ groups() ->
      parse_expr_arithmetic,
      parse_mixed_content,
      parse_component_string_prop,
+     parse_for_loop,
      parse_multiline_template,
      parse_slot_tag,
      compile_render_fun_js]}].
@@ -65,8 +69,12 @@ parse_nested_elements(_Config) ->
         parse("<div><span>hi</span></div>").
 
 parse_component_tag(_Config) ->
-    [{component, counter, [{initial_value, {expr, {integer, _, 0}}}]}] =
+    [{component, counter, undefined, [{initial_value, {expr, {integer, _, 0}}}]}] =
         parse("<:component module={counter} initial_value={0} />").
+
+parse_component_key_prop(_Config) ->
+    [{component, item_card, {expr, {integer, _, 7}}, [{id, {expr, {integer, _, 7}}}]}] =
+        parse("<:component module={item_card} key={7} id={7} />").
 
 parse_empty_element(_Config) ->
     [{element, <<"br">>, [], []}] = parse("<br/>").
@@ -91,8 +99,14 @@ parse_mixed_content(_Config) ->
     [{text, <<"a">>}, {expr, _}, {text, <<"b">>}] = parse("a{@x}b").
 
 parse_component_string_prop(_Config) ->
-    [{component, badge, [{label, <<"hi">>}]}] =
+    [{component, badge, undefined, [{label, <<"hi">>}]}] =
         parse("<:component module={badge} label=\"hi\" />").
+
+parse_for_loop(_Config) ->
+    [{for, 'X', {call, _, {remote, _, {atom, _, maps}, {atom, _, get}},
+                 [{atom, _, items}, {var, _, 'CONCRETE_STATE'}]},
+      [{element, <<"li">>, [], [{expr, {var, _, 'X'}}]}]}] =
+        parse("<:for item=\"X\" in={@items}><li>{X}</li></:for>").
 
 parse_multiline_template(_Config) ->
     Nodes = parse("<div class=\"counter\">\n"

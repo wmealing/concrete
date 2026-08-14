@@ -25,12 +25,20 @@
 // changed shows up through the normal render/1 path) -> render/1 runs
 // same as after an action.
 
+// Live <:component> instances, keyed by identity (see componentIdentity),
+// each holding the instance's own persistent Component map plus whether
+// Module:mount/2 has already run for it. Module-global, not per-Client
+// state, matching how ComponentInstances outlives any one render pass --
+// see Client.render()/reconcileComponentInstances below.
+const ComponentInstances = new Map();
+
 const Client = {
   module: null,
   component: null,
   container: null,
   vnodes: null, // the previous render's vnode tree, or null before the first render
   server: null, // Server map threaded through command round trips (opaque to render/1)
+  visitedInstances: null, // Set of identities touched by the render pass in progress, or null
 
   // --- Wire format (matches concrete_serializer / concrete_deserializer) ---
 
@@ -167,6 +175,14 @@ const Client = {
   render() {
     const state =
       Interpreter.mapLookup(Client.component, Type.atom("state")) || Type.map([]);
+    // Tracks which component instances this pass's tree walk touches --
+    // resolveComponentDom marks its identity into this set as it runs,
+    // via buildVNode's "component" case below. Collected as a set and
+    // reconciled once the whole pass is done (see
+    // reconcileComponentInstances) rather than mounting/unmounting
+    // inline as each node is visited, since walk order says nothing
+    // about mount-vs-unmount ordering across the pass.
+    Client.visitedInstances = new Set();
     const dom = Interpreter.call(Client.module, "render", 1, [state]);
     const newVnodes = Client.buildVNodeList(dom);
     if (Client.vnodes === null) {
@@ -181,6 +197,30 @@ const Client = {
       Client.patchChildren(Client.container, Client.vnodes, newVnodes);
     }
     Client.vnodes = newVnodes;
+    Client.reconcileComponentInstances(Client.visitedInstances);
+    Client.visitedInstances = null;
+  },
+
+  // Mark-and-sweep over ComponentInstances against the identities this
+  // render pass actually touched: anything untouched was present before
+  // this pass but didn't render this time (conditionally hidden, removed
+  // from a list, parent itself gone) -- it's dropped, the natural place
+  // an eventual unmount/2 would call from. Anything touched but not yet
+  // mounted is a first appearance -- mount/2 fires now, guarded by
+  // isExported the same way page-level mount/1 already is.
+  reconcileComponentInstances(visited) {
+    for (const [identity, entry] of ComponentInstances) {
+      if (!visited.has(identity)) {
+        ComponentInstances.delete(identity);
+        continue;
+      }
+      if (!entry.mounted) {
+        if (Interpreter.isExported(entry.modName, "mount", 2)) {
+          Interpreter.call(entry.modName, "mount", 2, [entry.propsMap, entry.component]);
+        }
+        entry.mounted = true;
+      }
+    }
   },
 
   // Renders a layout module's own template with pageHtml (already-
@@ -234,7 +274,7 @@ const Client = {
                `</${name.value}>`;
       }
       case "component": {
-        const childDom = Client.resolveComponentDom(rest[0], rest[1]);
+        const childDom = Client.resolveComponentDom(rest[0], rest[1], rest[2], rest[3]);
         return Client.domToHtml(childDom); // fresh slot context -- no slotHtml passed
       }
       case "slot":
@@ -248,22 +288,55 @@ const Client = {
   },
 
   // A <:component> tag's compiled DOM node is
-  // [Type.atom("component"), Type.atom(moduleName), Type.list([Type.tuple([key, value]), ...])].
+  // [Type.atom("component"), Type.atom(moduleName),
+  //  Type.list([Type.tuple([key, value]), ...]), KeyTerm, Type.integer(pathIndex)].
   // Prop values are already fully evaluated Type terms -- the encoder
   // inlines each prop's compiled expression directly into this list
   // literal inside the parent's own render/1, so by the time render/1
-  // returns, there's nothing left to evaluate here. Shared by both
-  // domToHtml and the vnode builder below -- resolving a component
-  // means running its init/2 then render/1, the same regardless of
-  // which renderer consumes the result.
-  resolveComponentDom(modAtom, propsListTerm) {
+  // returns, there's nothing left to evaluate here. KeyTerm is
+  // Type.atom("undefined") when the tag had no explicit `key` prop.
+  // pathIndex is a literal baked in at compile time -- a depth-first
+  // count of <:component> tags in this template, stable across renders
+  // because the template itself doesn't change, only the data does.
+  //
+  // Shared by both domToHtml and the vnode builder below -- resolving a
+  // component now means reusing its persistent instance if this
+  // identity has already appeared (ComponentInstances), running init/2
+  // only the first time, so state an action/3 mutated inside the child
+  // survives the parent re-rendering it. See "What 'instance' has to
+  // mean" in the mount plan for why identity needs both pieces: the
+  // same tag re-evaluated is the same instance (singleton case), but
+  // the same tag at a different key is a different one (list case).
+  resolveComponentDom(modAtom, propsListTerm, keyTerm, pathIndexTerm) {
     const modName = modAtom.value;
+    const identity = Client.componentIdentity(pathIndexTerm, keyTerm);
+    if (Client.visitedInstances) Client.visitedInstances.add(identity);
+
     const propsMap = Type.map(propsListTerm.data.map((pair) => pair.data));
-    const initResult = Interpreter.call(modName, "init", 2, [propsMap, Type.map([])]);
-    const childComponent = initResult.data[0]; // {Component, Server} -> Component
+    let entry = ComponentInstances.get(identity);
+    if (!entry) {
+      const initResult = Interpreter.call(modName, "init", 2, [propsMap, Type.map([])]);
+      entry = { modName, component: initResult.data[0], mounted: false, propsMap };
+      ComponentInstances.set(identity, entry);
+    } else {
+      // Reuse entry.component as-is -- this is the actual fix. propsMap
+      // is still refreshed so a first mount/2 call (which may happen on
+      // a later pass than init/2 did) sees this pass's props; an
+      // existing instance's *state* does not pick up new prop values --
+      // deferred, see "Prop updates on existing instances" in the plan.
+      entry.propsMap = propsMap;
+    }
+
     const childState =
-      Interpreter.mapLookup(childComponent, Type.atom("state")) || Type.map([]);
+      Interpreter.mapLookup(entry.component, Type.atom("state")) || Type.map([]);
     return Interpreter.call(modName, "render", 1, [childState]);
+  },
+
+  // Full identity = {path_key, explicit_key_or_undefined}, flattened to
+  // one string for use as a Map key.
+  componentIdentity(pathIndexTerm, keyTerm) {
+    const hasKey = !(keyTerm.type === "atom" && keyTerm.value === "undefined");
+    return hasKey ? `${pathIndexTerm.value}:${Client.termToText(keyTerm)}` : `${pathIndexTerm.value}`;
   },
 
   // --- Vnode diffing ---
@@ -286,6 +359,16 @@ const Client = {
   },
 
   buildVNode(node) {
+    // A <:for> loop compiles to a list comprehension whose template is
+    // the body's own compiled node list -- so a "for" position's
+    // runtime value isn't a single node, it's a list of per-iteration
+    // node-lists (one level more nested than an ordinary sibling run).
+    // Splicing it here, transparently, the same way an ordinary list of
+    // nodes already does, means every other case below stays oblivious
+    // to loops entirely: nesting depth is the only difference between
+    // "three sibling tags" and "a loop that produced three tags", and
+    // this is where that difference gets erased again.
+    if (node.type === "list") return Client.buildVNodeList(node);
     const [tag, ...rest] = node.data;
     switch (tag.value) {
       case "text":
@@ -306,7 +389,8 @@ const Client = {
         }];
       }
       case "component":
-        return Client.buildVNodeList(Client.resolveComponentDom(rest[0], rest[1]));
+        return Client.buildVNodeList(
+          Client.resolveComponentDom(rest[0], rest[1], rest[2], rest[3]));
       case "slot":
         throw new Error("slot rendered outside a layout context");
       default:

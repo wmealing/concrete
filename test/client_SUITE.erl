@@ -17,7 +17,11 @@
     slot_outside_layout_throws/1,
     command_button_dispatches_over_http/1,
     mount_runs_once_after_first_render/1,
-    mount_is_noop_without_definition/1
+    mount_is_noop_without_definition/1,
+    component_instance_persists_and_mounts_once/1,
+    component_without_mount_is_noop/1,
+    keyed_instances_added_and_removed/1,
+    for_loop_renders_keyed_component_list/1
 ]).
 
 all() ->
@@ -34,7 +38,11 @@ groups() ->
      slot_outside_layout_throws,
      command_button_dispatches_over_http,
      mount_runs_once_after_first_render,
-     mount_is_noop_without_definition]}].
+     mount_is_noop_without_definition,
+     component_instance_persists_and_mounts_once,
+     component_without_mount_is_noop,
+     keyed_instances_added_and_removed,
+     for_loop_renders_keyed_component_list]}].
 init_per_suite(Config) ->
     case os:find_executable("node") of
         false -> {skip, "node not found on PATH"};
@@ -212,6 +220,148 @@ mount_is_noop_without_definition(Config) ->
     [_Initial, IsExported, Result | _] = lines(Out),
     <<"false">> = IsExported,
     <<"NO_THROW">> = Result.
+
+%% The core regression test for persistent <:component> instances:
+%% fixture_singleton_parent embeds one unkeyed fixture_stateful_child.
+%% Dispatching the parent's own "tick" action re-renders it twice, which
+%% -- before ComponentInstances existed -- would have called
+%% fixture_stateful_child:init/2 fresh both times, discarding any state
+%% the child accumulated. Directly bumping the child's persisted
+%% component (simulating what a future child-action dispatch path would
+%% do) proves the *same* entry is read back on the next parent render
+%% instead of a freshly initialized one. mount/2 already ran once during
+%% Client.init's first render (the child appears immediately), so a
+%% spy installed after that -- covering only the two "tick" re-renders
+%% below -- must see zero further calls, proving it never re-fires for
+%% an instance that's already mounted.
+component_instance_persists_and_mounts_once(Config) ->
+    Out = run_client_multi(Config, fixture_singleton_parent,
+        [fixture_singleton_parent, fixture_stateful_child], #{},
+        "let mountCalls = 0;\n"
+        "const originalCall = Interpreter.call;\n"
+        "Interpreter.call = (mod, fn, arity, args) => {\n"
+        "  if (mod === \"fixture_stateful_child\" && fn === \"mount\" && arity === 2) mountCalls++;\n"
+        "  return originalCall(mod, fn, arity, args);\n"
+        "};\n"
+        "const entry = ComponentInstances.get(\"0\");\n"
+        "const wasMountedBeforeSpy = entry.mounted;\n"
+        "const bumped = Interpreter.call(\"fixture_stateful_child\", \"action\", 3, [\n"
+        "  Type.atom(\"bump\"), Type.map([]), entry.component,\n"
+        "]);\n"
+        "entry.component = bumped;\n"
+        "Client.dispatch(\"tick\");\n"
+        "console.log(container.innerHTML);\n"
+        "Client.dispatch(\"tick\");\n"
+        "console.log(container.innerHTML);\n"
+        "console.log(JSON.stringify({\n"
+        "  mountCalls, wasMountedBeforeSpy, sameEntry: ComponentInstances.get(\"0\") === entry,\n"
+        "}));\n"),
+    [_Initial, AfterFirstTick, AfterSecondTick, ResultJSON | _] = lines(Out),
+    {_, _} = binary:match(AfterFirstTick, <<"only:1">>),
+    {_, _} = binary:match(AfterSecondTick, <<"only:1">>),
+    {ok, #{<<"mountCalls">> := 0, <<"wasMountedBeforeSpy">> := true, <<"sameEntry">> := true}} =
+        thoas:decode(ResultJSON).
+
+%% fixture_badge defines no mount/2 -- the isExported guard in
+%% reconcileComponentInstances must keep that the free case it already
+%% is at the page level, both for the isExported check itself and for
+%% Client.render() (which runs reconciliation on every pass) not
+%% throwing.
+component_without_mount_is_noop(Config) ->
+    Out = run_client_multi(Config, fixture_widget, [fixture_widget, fixture_badge], #{},
+        "console.log(Interpreter.isExported(\"fixture_badge\", \"mount\", 2));\n"),
+    [_Initial, IsExported | _] = lines(Out),
+    <<"false">> = IsExported.
+
+%% Simulates a keyed, list-rendered set of components across two render
+%% passes (bypassing the template layer, which has no dynamic loop
+%% construct today -- see the mount plan's non-goals -- by driving
+%% Client.resolveComponentDom and Client.reconcileComponentInstances
+%% directly, the same functions a real template-driven render pass
+%% calls). Pass 1: three keyed items. Pass 2: the middle one removed.
+%% Asserts the removed identity leaves ComponentInstances, the survivors
+%% keep the exact same entry.component object (not just an equal one),
+%% and mount/2 never re-fires for a survivor.
+keyed_instances_added_and_removed(Config) ->
+    Out = run_client_multi(Config, fixture_widget,
+        [fixture_widget, fixture_badge, fixture_stateful_child], #{},
+        "let mountCalls = {};\n"
+        "const originalCall = Interpreter.call;\n"
+        "Interpreter.call = (mod, fn, arity, args) => {\n"
+        "  if (mod === \"fixture_stateful_child\" && fn === \"mount\" && arity === 2) {\n"
+        "    const id = Interpreter.mapLookup(args[0], Type.atom(\"id\")).value;\n"
+        "    mountCalls[id] = (mountCalls[id] || 0) + 1;\n"
+        "  }\n"
+        "  return originalCall(mod, fn, arity, args);\n"
+        "};\n"
+        "function propsFor(id) {\n"
+        "  return Type.list([Type.tuple([Type.atom(\"id\"), Type.bitstring(id)])]);\n"
+        "}\n"
+        "function pathIndex() { return Type.integer(0); }\n"
+        "function runPass(ids) {\n"
+        "  Client.visitedInstances = new Set();\n"
+        "  for (const id of ids) {\n"
+        "    Client.resolveComponentDom(\n"
+        "      Type.atom(\"fixture_stateful_child\"), propsFor(id), Type.bitstring(id), pathIndex());\n"
+        "  }\n"
+        "  Client.reconcileComponentInstances(Client.visitedInstances);\n"
+        "  Client.visitedInstances = null;\n"
+        "}\n"
+        "runPass([\"a\", \"b\", \"c\"]);\n"
+        "const bEntry = ComponentInstances.get(\"0:b\");\n"
+        "runPass([\"a\", \"c\"]);\n"
+        "console.log(JSON.stringify({\n"
+        "  bRemoved: !ComponentInstances.has(\"0:b\"),\n"
+        "  aSameEntry: ComponentInstances.get(\"0:a\") !== undefined,\n"
+        "  size: ComponentInstances.size,\n"
+        "  mountCalls,\n"
+        "}));\n"),
+    [_Initial, ResultJSON | _] = lines(Out),
+    {ok, #{<<"bRemoved">> := true, <<"aSameEntry">> := true, <<"size">> := 2,
+           <<"mountCalls">> := #{<<"a">> := 1, <<"b">> := 1, <<"c">> := 1}}} =
+        thoas:decode(ResultJSON).
+
+%% End-to-end test of the <:for> loop construct: fixture_list_parent
+%% renders a keyed <:component> once per item of a runtime list (not
+%% multiple static tags -- the actual compiled loop, run through
+%% concrete_encoder and executed here in Node against runtime.js).
+%% Removing the middle item and dispatching a fresh render proves the
+%% loop's per-iteration component instances behave exactly like the
+%% low-level keyed_instances_added_and_removed test already proved the
+%% underlying mechanism does: the removed identity's instance is
+%% dropped, survivors keep their exact persisted entry.component
+%% object, and (the mount spy is installed after Client.init, whose
+%% first render already mounted all three) no further mount/2 calls
+%% happen at all -- not for the survivors, and obviously not for the
+%% one that's gone.
+for_loop_renders_keyed_component_list(Config) ->
+    Out = run_client_multi(Config, fixture_list_parent,
+        [fixture_list_parent, fixture_stateful_child],
+        #{items => [<<"a">>, <<"b">>, <<"c">>]},
+        "let mountCalls = {};\n"
+        "const originalCall = Interpreter.call;\n"
+        "Interpreter.call = (mod, fn, arity, args) => {\n"
+        "  if (mod === \"fixture_stateful_child\" && fn === \"mount\" && arity === 2) {\n"
+        "    const id = Interpreter.mapLookup(args[0], Type.atom(\"id\")).value;\n"
+        "    mountCalls[id] = (mountCalls[id] || 0) + 1;\n"
+        "  }\n"
+        "  return originalCall(mod, fn, arity, args);\n"
+        "};\n"
+        "const aEntry = ComponentInstances.get(\"0:a\");\n"
+        "const newItems = Type.list([Type.bitstring(\"a\"), Type.bitstring(\"c\")]);\n"
+        "Client.dispatch(\"set_items\", Type.map([[Type.atom(\"items\"), newItems]]));\n"
+        "console.log(container.innerHTML);\n"
+        "console.log(JSON.stringify({\n"
+        "  bRemoved: !ComponentInstances.has(\"0:b\"),\n"
+        "  aSameEntry: ComponentInstances.get(\"0:a\") === aEntry,\n"
+        "  size: ComponentInstances.size,\n"
+        "  mountCalls,\n"
+        "}));\n"),
+    [First, AfterRemoval, ResultJSON | _] = lines(Out),
+    <<"<ul><span>a:0</span><span>b:0</span><span>c:0</span></ul>">> = First,
+    <<"<ul><span>a:0</span><span>c:0</span></ul>">> = AfterRemoval,
+    {ok, #{<<"bRemoved">> := true, <<"aSameEntry">> := true, <<"size">> := 2,
+           <<"mountCalls">> := #{}}} = thoas:decode(ResultJSON).
 
 %% --- Harness ---
 %% Builds the page bundle exactly like template_demo:bundle_js/1 (BEAM

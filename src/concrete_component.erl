@@ -13,10 +13,9 @@
 
 %% Mirrors concrete_page's mount/1 (Props, Component -- same shape as
 %% action/3's (ActionName, Params, Component), not a new convention).
-%% Unused until per-instance <:component> mounting exists (see
-%% docs/on-mount-plan.md, "Blocked on: persistent component instances")
-%% -- declared now so example code written against it is
-%% forward-compatible once component-level mount ships.
+%% Called once client-side, the first time this <:component> call
+%% site's identity appears in a render pass (see client.js's
+%% ComponentInstances / resolveComponentDom / reconcileComponentInstances).
 -callback mount(Props :: map(), Component :: map()) -> ok.
 
 -optional_callbacks([action/3, command/3, mount/2]).
