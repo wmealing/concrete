@@ -111,7 +111,9 @@ reach a library today), `eval`/`exec`, `dispatch_event`.
 
 -export([call/2, call/3, new/2, get/2, set/3, delete/2, instanceof/2, typeof/1, await/1]).
 
--doc "A JS property, method, or class path: either a dotted binary (`<<\"THREE.Scene\">>`) or an atom, quoted if it isn't a valid bare atom (`'THREE.Scene'`) and unquoted otherwise (`add`).".
+-doc """
+A JS property, method, or class path: either a dotted binary (`<<"THREE.Scene">>`) or an atom, quoted if it isn't a valid bare atom (`'THREE.Scene'`) and unquoted otherwise (`add`).
+""".
 -type dotted_path() :: binary() | atom().
 
 -doc """
