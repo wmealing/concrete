@@ -21,6 +21,9 @@
     andalso_orelse/1,
     case_sees_outer_binding/1,
     case_clause_error/1,
+    function_clause_reason_is_bare_atom/1,
+    function_clause_report_marks_mismatches/1,
+    function_clause_report_marks_guard_mismatch/1,
     anon_fun/1,
     anon_fun_closure/1,
     anon_fun_multiclause/1,
@@ -85,6 +88,9 @@ groups() ->
      andalso_orelse,
      case_sees_outer_binding,
      case_clause_error,
+     function_clause_reason_is_bare_atom,
+     function_clause_report_marks_mismatches,
+     function_clause_report_marks_guard_mismatch,
      anon_fun,
      anon_fun_closure,
      anon_fun_multiclause,
@@ -211,6 +217,42 @@ case_clause_error(Config) ->
     <<"caught">> = run(Config,
         "main() -> try f(3) catch error:{case_clause, _} -> caught end.\n"
         "f(N) -> case N of 1 -> one end.\n").
+
+%% --- function_clause diagnostics (ClauseBlame) ---
+
+%% The Erlang-visible reason stays the bare atom 'function_clause',
+%% matching real BEAM semantics -- the rendered "attempted clauses"
+%% report lives only in the JS exception's message (see the
+%% uncaught-propagation tests below), not in the reason term, so any
+%% `catch error:function_clause -> ...` keeps working unchanged.
+function_clause_reason_is_bare_atom(Config) ->
+    <<"caught">> = run(Config,
+        "main() -> try f(a) catch error:function_clause -> caught end.\n"
+        "f(1) -> one.\n").
+
+%% Let the error propagate uncaught -- Node's default uncaught-exception
+%% printer includes the full multi-line Error.message in its output
+%% (verified manually before writing this test), so the combined
+%% stdout+stderr `run/2` captures is enough to assert on the rendered
+%% report text without any test-harness changes.
+function_clause_report_marks_mismatches(Config) ->
+    Out = run(Config,
+        "main() -> f(complete_task, x).\n"
+        "f(add_task, _) -> add;\n"
+        "f(complete_task, ok) -> complete.\n"),
+    true = has_match(Out, <<"f(-add_task-, _)">>),
+    true = has_match(Out, <<"f(complete_task, -ok-)">>),
+    true = has_match(Out, <<"Attempted function clauses:">>),
+    true = has_match(Out, <<"no function clause matching m:f/2">>).
+
+function_clause_report_marks_guard_mismatch(Config) ->
+    Out = run(Config,
+        "main() -> f(0).\n"
+        "f(N) when N > 0 -> pos.\n"),
+    true = has_match(Out, <<"f(N) when -N > 0-">>).
+
+has_match(Haystack, Needle) ->
+    nomatch =/= binary:match(Haystack, Needle).
 
 %% --- M4: anonymous functions ---
 

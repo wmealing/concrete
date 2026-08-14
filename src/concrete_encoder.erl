@@ -66,7 +66,11 @@ encode_module(#ir_module{name = Name, definitions = Defs}) ->
 encode_function_def(ModName, #ir_function_def{name = Fun, arity = Arity, clauses = Clauses}) ->
     reset_tmp(),
     FnBlocking = sets:is_element({Fun, Arity}, blocking_set()),
-    ClausesJS = [encode_clause(C, top, FnBlocking) || C <- Clauses],
+    %% Named top-level functions carry blame metadata (see
+    %% encode_clause_with_blame/2) so a function_clause failure can
+    %% report which parameter/guard of each attempted clause didn't
+    %% match -- anon-fun/case/try clauses (encode_clause/3) don't.
+    ClausesJS = [encode_clause_with_blame(C, FnBlocking) || C <- Clauses],
     ModJS = encode_string(atom_to_binary(ModName)),
     io_lib:format(
         "Interpreter.defineErlangFunction(~s, ~s, ~w, ((currentModule) => [\n~s])(~s));\n",
@@ -91,6 +95,79 @@ encode_clause(#ir_clause{patterns = Pats, guards = Guards, body = Body}, Mode, B
     GuardJS = encode_guard_fn(Guards),
     BodyJS  = encode_body_fn(Body, Blocking),
     io_lib:format("  [~s, ~s, ~s]", [PatJS, GuardJS, BodyJS]).
+
+%% Like encode_clause/3 in top mode, plus a 4th "blame" element used only
+%% to build a function_clause diagnostic report when every clause of a
+%% named function fails to match (see runtime.js's
+%% Interpreter.buildFunctionClauseReport). Not used for anon funs, case,
+%% or try clauses -- see encode_function_def/2.
+encode_clause_with_blame(#ir_clause{patterns = Pats, guards = Guards, body = Body} = C,
+                          Blocking) ->
+    PatJS   = encode_pattern_fn(Pats, top),
+    GuardJS = encode_guard_fn(Guards),
+    BodyJS  = encode_body_fn(Body, Blocking),
+    BlameJS = encode_clause_blame(C),
+    io_lib:format("  [~s, ~s, ~s, ~s]", [PatJS, GuardJS, BodyJS, BlameJS]).
+
+%% --- Clause blame (function_clause diagnostics) ---
+
+encode_clause_blame(#ir_clause{patterns = Pats, guards = Guards,
+                                param_srcs = PSrcs, guard_srcs = GSrcs}) ->
+    ParamFns = encode_param_blame_fns(Pats, PSrcs),
+    GuardsJS = encode_guard_blame(Guards, GSrcs),
+    io_lib:format("{ params: [~s], guards: ~s }", [join(ParamFns, ", "), GuardsJS]).
+
+%% One independent test function per parameter: (bindings, value) => bool,
+%% mutating bindings on match. Seen threads across parameters (not reset
+%% per param) so a variable repeated across two parameters still compiles
+%% to the runtime equality-check branch, exactly as compile_patterns/2
+%% does for the real (whole-clause) matcher.
+encode_param_blame_fns(Pats, PSrcs0) ->
+    PSrcs = align_srcs(PSrcs0, Pats),
+    {Fns, _Seen} = lists:mapfoldl(
+        fun({P, Src}, Seen) ->
+            {Stmts, Seen2} = compile_pattern(P, "value", "return false;", top, Seen),
+            FnJS = io_lib:format(
+                "{ source: ~s, test: (bindings, value) => { ~sreturn true; } }",
+                [encode_string(Src), Stmts]),
+            {FnJS, Seen2}
+        end,
+        sets:new(), lists:zip(Pats, PSrcs)),
+    Fns.
+
+%% guards/guard_srcs are both [[G1, G2], [G3]] (OR of AND-sequences) --
+%% Erlang's own guard-sequence syntax already is the split-into-leaves
+%% shape this needs, so no restructuring is needed here.
+encode_guard_blame(Guards, GSrcs0) ->
+    GSrcs = align_srcs(GSrcs0, Guards),
+    Seqs = [encode_guard_seq_blame(Seq, align_srcs(SrcSeq, Seq))
+            || {Seq, SrcSeq} <- lists:zip(Guards, GSrcs)],
+    io_lib:format("[~s]", [join(Seqs, ", ")]).
+
+encode_guard_seq_blame(Seq, SrcSeq) ->
+    %% A guard leaf can throw when blame re-evaluates it against a
+    %% partially-bound bindings object (e.g. a param that didn't match
+    %% left a variable unbound) -- caught and treated as false, matching
+    %% real Erlang guard-exception semantics.
+    Leaves = [io_lib:format(
+                "{ source: ~s, test: (bindings) => { try { return Interpreter.isTrue(~s); } "
+                "catch (e) { return false; } } }",
+                [encode_string(Src), encode_ir(G)])
+              || {G, Src} <- lists:zip(Seq, SrcSeq)],
+    io_lib:format("[~s]", [join(Leaves, ", ")]).
+
+%% param_srcs/guard_srcs are only populated by concrete_transformer;
+%% #ir_clause{}/#ir_function_def{} built directly (hand-written IR in
+%% encoder/template-parser tests, or concrete_template_parser's
+%% compiled render/1, which has no original Erlang syntax to render in
+%% the first place) leave them at their [] default. Rather than crash
+%% the whole build over missing diagnostic metadata, fall back to an
+%% opaque placeholder per item -- the generated test functions
+%% themselves are unaffected either way.
+align_srcs(Srcs, Items) when length(Srcs) =:= length(Items) ->
+    Srcs;
+align_srcs(_Srcs, Items) ->
+    [<<"?">> || _ <- Items].
 
 %% A nested clause list wrapped so patterns/bodies can see the enclosing
 %% bindings object. Blocking-ness is decided by the caller: either that
@@ -307,7 +384,8 @@ encode_ir(#ir_anon_call{function = F, args = Args}) ->
 encode_ir(#ir_anon_fun{clauses = Cls, arity = Arity}) ->
     GroupBlocking = group_blocking(Cls),
     io_lib:format(
-        "Type.anonFun(~w, ((parentBindings) => (args) => Interpreter.callClauses(args, [\n~s]))(bindings))",
+        "Type.anonFun(~w, ((parentBindings) => (args) => "
+        "Interpreter.callClauses(args, [\n~s], null, null))(bindings))",
         [Arity, join([encode_clause(C, nested, GroupBlocking) || C <- Cls], ",\n")]);
 encode_ir(#ir_fun_ref{module = current_module, function = F, arity = A}) ->
     io_lib:format("Type.anonFun(~w, (args) => Interpreter.call(currentModule, ~s, ~w, args))",

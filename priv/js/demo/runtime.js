@@ -16,9 +16,15 @@ const Type = {
 };
 
 // Erlang exceptions: class is "throw" | "error" | "exit", reason a term.
+// detail, when given, overrides the default message -- used by
+// function_clause to carry the human-readable "attempted clauses"
+// report (see Interpreter.buildFunctionClauseReport) without changing
+// the Erlang-visible reason term itself (still the bare atom
+// 'function_clause', matching real BEAM semantics, so `catch
+// error:function_clause -> ...` keeps working).
 class ErlangError extends Error {
-  constructor(cls, reason) {
-    super(`${cls}: ${termToString(reason)}`);
+  constructor(cls, reason, detail) {
+    super(detail !== undefined ? detail : `${cls}: ${termToString(reason)}`);
     this.erlangClass = cls;
     this.reason = reason;
   }
@@ -433,15 +439,85 @@ const Interpreter = {
       Type.tuple([Type.atom("badmatch"), value]));
   },
 
-  // Try each [patternFn, guardFn, bodyFn] clause in order.
-  callClauses(args, clauses) {
+  // Try each [patternFn, guardFn, bodyFn, blame?] clause in order.
+  // moduleName/funcName are only used to label a function_clause
+  // failure report -- null for anonymous funs, which get the generic
+  // message (see encode_ir(#ir_anon_fun{}) in concrete_encoder.erl).
+  callClauses(args, clauses, moduleName, funcName) {
     for (const [patFn, guardFn, bodyFn] of clauses) {
       const bindings = patFn(args);
       if (bindings !== null && guardFn(bindings)) {
         return bodyFn(bindings);
       }
     }
-    Interpreter.raise("error", Type.atom("function_clause"));
+    const detail = Interpreter.buildFunctionClauseReport(
+      moduleName, funcName, args, clauses);
+    throw new ErlangError("error", Type.atom("function_clause"), detail);
+  },
+
+  // Built lazily, only once every clause of a named function has
+  // failed to match -- replays each attempted clause's blame metadata
+  // (see concrete_encoder:encode_clause_blame/1) against the real
+  // call args, marking which parameter/guard didn't match, and
+  // renders an Erlang-flavored "attempted function clauses" report.
+  // Anon funs (moduleName/funcName both null, or clauses carrying no
+  // blame element) fall back to a plain one-line message.
+  buildFunctionClauseReport(moduleName, funcName, args, clauses) {
+    const mfa = moduleName && funcName
+      ? `${moduleName}:${funcName}/${args.length}`
+      : `#Fun<${args.length}>`;
+
+    if (!clauses.length || !clauses[0][3]) {
+      return `no function clause matching ${mfa}`;
+    }
+
+    const argsText = args.reduce(
+      (acc, arg, index) =>
+        `${acc}\n    # ${index + 1}\n    ${termToString(arg)}\n`,
+      `\n\nThe following arguments were given to ${mfa}:\n`);
+
+    const CLAUSE_LIMIT = 10;
+    const shown = clauses.slice(0, CLAUSE_LIMIT);
+    const clausesText = shown
+      .map(([, , , blame]) => Interpreter.renderClauseAttempt(funcName, args, blame))
+      .join("");
+    const hiddenCount = clauses.length - CLAUSE_LIMIT;
+    const hiddenText = hiddenCount > 0
+      ? `    ...\n    (${hiddenCount} ${hiddenCount === 1 ? "clause" : "clauses"} not shown)\n`
+      : "";
+
+    return `no function clause matching ${mfa}${argsText}` +
+      `\nAttempted function clauses:\n\n${clausesText}${hiddenText}`;
+  },
+
+  // Replays one clause's blame metadata against the real args, marking
+  // each parameter and each guard leaf, then renders it back as an
+  // Erlang clause head -- non-matching parts wrapped `-like this-`
+  // (a plain-text stand-in for the emphasis a real terminal would give
+  // via ANSI; there's no rich formatting available in a thrown
+  // Error.message shown by the browser console).
+  renderClauseAttempt(funcName, args, blame) {
+    let bindings = {};
+    const paramsText = blame.params.map((param, index) => {
+      const trial = Object.assign({}, bindings);
+      const matched = param.test(trial, args[index]);
+      if (matched) bindings = trial;
+      return matched ? param.source : `-${param.source}-`;
+    }).join(", ");
+
+    // Erlang guard syntax: "," is and within a sequence, ";" is or
+    // between sequences -- one "when", not one per sequence.
+    const guardsText = blame.guards.length > 0
+      ? ` when ${blame.guards.map((seq) =>
+          seq.map((leaf) => {
+            const matched = leaf.test(bindings);
+            return matched ? leaf.source : `-${leaf.source}-`;
+          }).join(", ")
+        ).join("; ")}`
+      : "";
+
+    const name = funcName || "";
+    return `    ${name}(${paramsText})${guardsText}\n`;
   },
 
   // Called by generated module bundles to register compiled functions.
@@ -466,7 +542,7 @@ const Interpreter = {
         `concrete_beam_reader:extract_ir/1 never traces into it.`
       );
     }
-    const impl = (args) => Interpreter.callClauses(args, clauses);
+    const impl = (args) => Interpreter.callClauses(args, clauses, moduleName, funcName);
     modules[moduleName][key] = impl;
     Erlang[`${moduleName}:${key}`] = (...args) => {
       const result = impl(args);

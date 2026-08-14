@@ -26,7 +26,16 @@
 %% Function definitions
 -record(ir_module,      {name :: atom(), definitions :: list()}).
 -record(ir_function_def,{name :: atom(), arity :: non_neg_integer(), clauses :: list()}).
--record(ir_clause,      {patterns :: list(), guards :: list(), body :: list()}).
+-record(ir_clause,      {patterns :: list(), guards :: list(), body :: list(),
+                         %% Erlang source text for each parameter pattern and
+                         %% each guard leaf, rendered via erl_pp at transform
+                         %% time -- only populated for top-level named
+                         %% function clauses (see concrete_transformer), used
+                         %% by concrete_encoder to build function_clause
+                         %% "attempted clauses" diagnostics. guard_srcs
+                         %% mirrors guards' [[G1,G2],[G3]] OR-of-AND shape.
+                         param_srcs = [] :: [binary()],
+                         guard_srcs = [] :: [[binary()]]}).
 
 %% Function calls
 -record(ir_local_call,  {name :: atom(), arity :: non_neg_integer(), args :: list()}).

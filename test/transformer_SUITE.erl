@@ -32,6 +32,7 @@
     unop/1,
     list_comprehension/1,
     function_clause/1,
+    function_clause_blame_sources/1,
     full_module/1
 ]).
 
@@ -48,7 +49,7 @@ groups() ->
         receive_no_after, receive_with_after,
         anon_fun, fun_ref_local, fun_ref_remote,
         binop, unop, list_comprehension,
-        function_clause, full_module
+        function_clause, function_clause_blame_sources, full_module
     ]}].
 ctx() -> concrete_transformer:new_ctx(test_module).
 
@@ -195,6 +196,18 @@ function_clause(_Config) ->
     #ir_clause{patterns = [#ir_variable{name = 'X'}],
                guards   = [],
                body     = [#ir_variable{name = 'X'}]} =
+        concrete_transformer:transform_clause(Clause, ctx()).
+
+%% param_srcs/guard_srcs are the erl_pp-rendered source text
+%% concrete_encoder uses to build function_clause "attempted clauses"
+%% diagnostics (see encode_clause_blame/1) -- rendered independently of
+%% the IR patterns/guards themselves, straight from the original
+%% erl_parse forms.
+function_clause_blame_sources(_Config) ->
+    {ok, Tokens, _} = erl_scan:string("f(#{count := N}) when N > 0 -> ok.\n"),
+    {ok, {function, _, f, 1, [Clause]}} = erl_parse:parse_form(Tokens),
+    #ir_clause{param_srcs = [<<"#{count := N}">>],
+               guard_srcs = [[<<"N > 0">>]]} =
         concrete_transformer:transform_clause(Clause, ctx()).
 
 full_module(_Config) ->

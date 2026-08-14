@@ -34,10 +34,19 @@ transform_form({function, _L, Name, _Arity, Clauses}, Ctx) ->
 -spec transform_clause(term(), #ctx{}) -> #ir_clause{}.
 transform_clause({clause, _L, Patterns, Guards, Body}, Ctx) ->
     #ir_clause{
-        patterns = [transform_expr(P, Ctx#ctx{in_pattern = true}) || P <- Patterns],
-        guards   = [[transform_expr(G, Ctx) || G <- Seq] || Seq <- Guards],
-        body     = [transform_expr(E, Ctx) || E <- Body]
+        patterns   = [transform_expr(P, Ctx#ctx{in_pattern = true}) || P <- Patterns],
+        guards     = [[transform_expr(G, Ctx) || G <- Seq] || Seq <- Guards],
+        body       = [transform_expr(E, Ctx) || E <- Body],
+        param_srcs = [pp_expr(P) || P <- Patterns],
+        guard_srcs = [[pp_expr(G) || G <- Seq] || Seq <- Guards]
     }.
+
+%% Renders a single erl_parse expression form back to Erlang source text
+%% via OTP's own pretty printer -- used only to build human-readable
+%% function_clause diagnostics (see concrete_encoder:encode_clause_blame/1),
+%% never for code generation.
+pp_expr(Form) ->
+    string:trim(iolist_to_binary(erl_pp:expr(Form))).
 
 -spec transform_expr(term(), #ctx{}) -> ir().
 transform_expr({atom, _, V}, _Ctx)    -> #ir_atom{value = V};
