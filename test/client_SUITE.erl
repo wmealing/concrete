@@ -15,7 +15,9 @@
     embedded_component_renders/1,
     render_with_layout_fills_slot/1,
     slot_outside_layout_throws/1,
-    command_button_dispatches_over_http/1
+    command_button_dispatches_over_http/1,
+    mount_runs_once_after_first_render/1,
+    mount_is_noop_without_definition/1
 ]).
 
 all() ->
@@ -30,7 +32,9 @@ groups() ->
      embedded_component_renders,
      render_with_layout_fills_slot,
      slot_outside_layout_throws,
-     command_button_dispatches_over_http]}].
+     command_button_dispatches_over_http,
+     mount_runs_once_after_first_render,
+     mount_is_noop_without_definition]}].
 init_per_suite(Config) ->
     case os:find_executable("node") of
         false -> {skip, "node not found on PATH"};
@@ -177,6 +181,37 @@ command_button_dispatches_over_http(Config) ->
            <<"stateType">> := <<"map">>,
            <<"html">> := <<"<p>count: 41</p><button concrete-command=\"bump\">+</button>">>}} =
         thoas:decode(ResultJSON).
+
+%% Client.init calls Client.render() then Client.mount() synchronously,
+%% in that order, before returning -- so by the time the harness's own
+%% post-init console.log runs, mount/1 has already run and its dom:*
+%% call has already landed. fixture_mount_page's mount/1 receives the
+%% same wire-decoded Component shape action/3 gets (asserted here by
+%% actually reading a field out of it) and overwrites the container
+%% with a value only mount/1 could have produced.
+mount_runs_once_after_first_render(Config) ->
+    Out = run_client_multi(Config, fixture_mount_page, [fixture_mount_page],
+        #{greeting => <<"mounted-ok">>}, ""),
+    [First | _] = lines(Out),
+    <<"mounted-ok">> = First.
+
+%% The overwhelming common case -- a page/component that never defines
+%% mount/1 -- must stay free: Interpreter.isExported must report false
+%% (so Client.mount() never attempts Interpreter.call against a
+%% function that was never compiled in), and calling Client.mount()
+%% directly must not throw.
+mount_is_noop_without_definition(Config) ->
+    Out = run_client(Config, #{},
+        "console.log(Interpreter.isExported(\"fixture_counter\", \"mount\", 1));\n"
+        "try {\n"
+        "  Client.mount();\n"
+        "  console.log(\"NO_THROW\");\n"
+        "} catch (e) {\n"
+        "  console.log(\"THROW:\" + e.message);\n"
+        "}\n"),
+    [_Initial, IsExported, Result | _] = lines(Out),
+    <<"false">> = IsExported,
+    <<"NO_THROW">> = Result.
 
 %% --- Harness ---
 %% Builds the page bundle exactly like template_demo:bundle_js/1 (BEAM

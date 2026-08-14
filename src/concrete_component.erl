@@ -11,7 +11,15 @@
 
 -callback template() -> TemplateFile :: string() | {inline, term()}.
 
--optional_callbacks([action/3, command/3]).
+%% Mirrors concrete_page's mount/1 (Props, Component -- same shape as
+%% action/3's (ActionName, Params, Component), not a new convention).
+%% Unused until per-instance <:component> mounting exists (see
+%% docs/on-mount-plan.md, "Blocked on: persistent component instances")
+%% -- declared now so example code written against it is
+%% forward-compatible once component-level mount ships.
+-callback mount(Props :: map(), Component :: map()) -> ok.
+
+-optional_callbacks([action/3, command/3, mount/2]).
 
 -export([default_action/3, default_command/3]).
 

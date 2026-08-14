@@ -8,11 +8,11 @@
 
 %% Build a call graph rooted at the page/component module's entry
 %% points: init/2 and template/0 are always roots (the JS runtime calls
-%% them directly, not via any traceable Erlang call); action/3 is a
-%% root too when present -- the browser dispatches to it directly from
-%% a concrete-click handler, never via a call reachable from init/2, so
-%% plain call-graph tracing would otherwise mark it (wrongly) as dead
-%% code.
+%% them directly, not via any traceable Erlang call); action/3 and
+%% mount/1 are roots too when present -- the browser dispatches to them
+%% directly (a concrete-click handler for action/3, Client.mount() for
+%% mount/1), never via a call reachable from init/2, so plain
+%% call-graph tracing would otherwise mark them (wrongly) as dead code.
 %%
 %% command/3 is deliberately NOT a root, unlike action/3. Every
 %% dispatch path that reaches it -- concrete_command_handler's HTTP
@@ -45,7 +45,7 @@ build(PageModule, PLT) ->
 -spec page_entries(module(), term()) -> [mfa_key()].
 page_entries(PageModule, PLT) ->
     BaseEntries = [{PageModule, init, 2}, {PageModule, template, 0}],
-    ExtraEntries = [E || E <- [{PageModule, action, 3}],
+    ExtraEntries = [E || E <- [{PageModule, action, 3}, {PageModule, mount, 1}],
                           concrete_plt:get(PLT, E) =/= not_found],
     BaseEntries ++ ExtraEntries.
 

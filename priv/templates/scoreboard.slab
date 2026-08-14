@@ -3,6 +3,6 @@
   <p>Player: <strong>{@player}</strong></p>
   <p>Score: {@score}</p>
   <p>Next score: {@score + 1}</p>
-  <button concrete-click="increment">+</button>
-  <button concrete-click="decrement">-</button>
+  <button id="score-inc" concrete-click="increment">+</button>
+  <button id="score-dec" concrete-click="decrement">-</button>
 </div>

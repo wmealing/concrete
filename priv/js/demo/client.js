@@ -104,6 +104,19 @@ const Client = {
       }
     });
     Client.render();
+    Client.mount();
+  },
+
+  // Runs Module:mount/1 exactly once, right after the first render has
+  // put the page's markup in the real DOM -- not from inside render/1
+  // (that also runs server-side, and would need a wipe-then-rebuild
+  // tick to be safe; here the DOM is already in its final first-render
+  // state). A no-op for the common case of a page that doesn't define
+  // mount/1, guarded by isExported so that case never even attempts a
+  // call.
+  mount() {
+    if (!Interpreter.isExported(Client.module, "mount", 1)) return;
+    Interpreter.call(Client.module, "mount", 1, [Client.component]);
   },
 
   dispatch(actionName, params) {

@@ -477,6 +477,15 @@ const Interpreter = {
     };
   },
 
+  // Cheap existence check against the same table defineErlangFunction
+  // populates -- lets a caller (Client.mount()) skip invoking a
+  // function that was never compiled in, without paying for a
+  // try/catch around a call that would just throw "Unknown function".
+  isExported(moduleName, funcName, arity) {
+    const mod = modules[moduleName];
+    return Boolean(mod && mod[`${funcName}/${arity}`]);
+  },
+
   // Local call: Interpreter.call(currentModule, "funcName", arity, args)
   // Falls back to the Erlang BIF table for auto-imported BIFs
   // (integer_to_binary/1 etc.), mirroring Erlang's call resolution.

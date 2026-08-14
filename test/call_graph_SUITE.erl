@@ -10,7 +10,10 @@
     unreachable_excluded/1,
     not_found_mfa_skipped/1,
     remote_call_followed/1,
-    page_entries_includes_action_excludes_command/1
+    page_entries_includes_action_excludes_command/1,
+    page_entries_includes_mount_when_present/1,
+    page_entries_excludes_mount_when_absent/1,
+    mount_root_reaches_helper/1
 ]).
 
 all() ->
@@ -24,7 +27,10 @@ groups() ->
         unreachable_excluded,
         not_found_mfa_skipped,
         remote_call_followed,
-        page_entries_includes_action_excludes_command
+        page_entries_includes_action_excludes_command,
+        page_entries_includes_mount_when_present,
+        page_entries_excludes_mount_when_absent,
+        mount_root_reaches_helper
     ]}].
 %% Build a PLT and a minimal page module that has init/2 and template/0.
 base_plt() ->
@@ -167,3 +173,66 @@ page_entries_includes_action_excludes_command(_Config) ->
     Entries = concrete_call_graph:page_entries(ac_mod, PLT),
     true  = lists:member({ac_mod, action, 3}, Entries),
     false = lists:member({ac_mod, command, 3}, Entries).
+
+%% mount/1 is a root exactly like action/3: present in the PLT ->
+%% present in page_entries/2's output.
+page_entries_includes_mount_when_present(_Config) ->
+    PLT = concrete_plt:new(),
+    TplDef = #ir_function_def{
+        name = template, arity = 0,
+        clauses = [#ir_clause{patterns = [], guards = [],
+                              body = [#ir_atom{value = ok}]}]
+    },
+    MountDef = #ir_function_def{
+        name = mount, arity = 1,
+        clauses = [#ir_clause{patterns = [#ir_wildcard{}], guards = [],
+                              body = [#ir_atom{value = ok}]}]
+    },
+    concrete_plt:put(PLT, {mnt_mod, template, 0}, TplDef),
+    concrete_plt:put(PLT, {mnt_mod, mount,    1}, MountDef),
+    Entries = concrete_call_graph:page_entries(mnt_mod, PLT),
+    true = lists:member({mnt_mod, mount, 1}, Entries).
+
+%% The overwhelming common case -- no mount/1 defined -- must not gain
+%% a phantom root.
+page_entries_excludes_mount_when_absent(_Config) ->
+    PLT = concrete_plt:new(),
+    TplDef = #ir_function_def{
+        name = template, arity = 0,
+        clauses = [#ir_clause{patterns = [], guards = [],
+                              body = [#ir_atom{value = ok}]}]
+    },
+    concrete_plt:put(PLT, {no_mnt_mod, template, 0}, TplDef),
+    Entries = concrete_call_graph:page_entries(no_mnt_mod, PLT),
+    false = lists:member({no_mnt_mod, mount, 1}, Entries).
+
+%% The actual point of mount/1 being a real root (not just present in
+%% page_entries/2's list): a helper only ever reached through mount/1
+%% must survive ordinary call-graph tracing, the same way a helper
+%% reached only through action/3 already does -- no dead
+%% `case false of true -> ... end` branch required to keep it alive.
+mount_root_reaches_helper(_Config) ->
+    PLT = concrete_plt:new(),
+    TplDef = #ir_function_def{
+        name = template, arity = 0,
+        clauses = [#ir_clause{patterns = [], guards = [],
+                              body = [#ir_atom{value = ok}]}]
+    },
+    MountDef = #ir_function_def{
+        name = mount, arity = 1,
+        clauses = [#ir_clause{
+            patterns = [#ir_wildcard{}], guards = [],
+            body     = [#ir_local_call{name = mount_helper, arity = 0, args = []}]
+        }]
+    },
+    HelperDef = #ir_function_def{
+        name = mount_helper, arity = 0,
+        clauses = [#ir_clause{patterns = [], guards = [],
+                              body = [#ir_atom{value = ok}]}]
+    },
+    concrete_plt:put(PLT, {mh_mod, template,     0}, TplDef),
+    concrete_plt:put(PLT, {mh_mod, mount,        1}, MountDef),
+    concrete_plt:put(PLT, {mh_mod, mount_helper, 0}, HelperDef),
+    G = concrete_call_graph:build(mh_mod, PLT),
+    Reachable = concrete_call_graph:reachable(G),
+    true = lists:member({mh_mod, mount_helper, 0}, Reachable).

@@ -19,7 +19,8 @@
     bundle_with_inline_layout_template_compiles/1,
     bundle_never_traces_compiler_internal_modules/1,
     bundle_with_maps_get_in_init_compiles/1,
-    bundle_never_emits_native_bif_definitions/1
+    bundle_never_emits_native_bif_definitions/1,
+    mount_root_helper_reaches_bundle_without_dead_branch/1
 ]).
 
 all() ->
@@ -40,7 +41,8 @@ groups() ->
         bundle_with_inline_layout_template_compiles,
         bundle_never_traces_compiler_internal_modules,
         bundle_with_maps_get_in_init_compiles,
-        bundle_never_emits_native_bif_definitions
+        bundle_never_emits_native_bif_definitions,
+        mount_root_helper_reaches_bundle_without_dead_branch
     ]}].
 
 discovers_embedded_component(_Config) ->
@@ -214,3 +216,26 @@ bundle_never_emits_native_bif_definitions(_Config) ->
     false = lists:member({maps, get, 3}, Reachable),
     Bundle = concrete_encoder:encode_bundle(Graph, PLT),
     nomatch = binary:match(Bundle, <<"defineErlangFunction(\"maps\"">>).
+
+%% The reachability-anchor workaround docs/on-mount-plan.md removes:
+%% fixture_mount_reachability_page's on_event/1 is only ever reached,
+%% in real usage, through a bare-atom Module/Function pair handed to
+%% sse:connect/3 -- something concrete_call_graph:collect_calls/2 can't
+%% trace (it only follows literal call nodes, never data flowing
+%% through a call's own arguments). Before mount/1 was a call-graph
+%% root, on_event/1 needed a second, fake call site elsewhere just to
+%% survive dead-code elimination. Here it's reached the ordinary way,
+%% through mount/1's own literal call to it -- and mount/1 itself is
+%% only reachable because page_entries/2 now roots the graph there,
+%% the same way it already does for action/3.
+mount_root_helper_reaches_bundle_without_dead_branch(_Config) ->
+    PLT = concrete_plt:new(),
+    ok = rebar_compiler_concrete:populate_plt(PLT, [fixture_mount_reachability_page]),
+    Entries = concrete_call_graph:page_entries(fixture_mount_reachability_page, PLT),
+    true = lists:member({fixture_mount_reachability_page, mount, 1}, Entries),
+    Graph = concrete_call_graph:build_from_entries(Entries, PLT),
+    Reachable = concrete_call_graph:reachable(Graph),
+    true = lists:member({fixture_mount_reachability_page, on_event, 1}, Reachable),
+    Bundle = concrete_encoder:encode_bundle(Graph, PLT),
+    {_, _} = binary:match(Bundle,
+        <<"defineErlangFunction(\"fixture_mount_reachability_page\", \"on_event\"">>).
