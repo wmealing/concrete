@@ -53,8 +53,14 @@ init(Req, State) ->
         page_shell(HTML), Req),
     {ok, Req2, State}.
 
+%% unicode:characters_to_binary/1 re-encodes the em dash below (and any
+%% other non-ASCII source text) into real UTF-8 bytes -- the plain
+%% (non-<<>>) triple-quoted string it lives in is a charlist, so a
+%% character above codepoint 255 would otherwise be an invalid iodata
+%% element and crash cowboy_req:reply/4 (via iolist_size/1) at request
+%% time instead of at compile time.
 page_shell(HTML) ->
-    [
+    unicode:characters_to_binary([
      """
      <!DOCTYPE html>
      <html lang="en">
@@ -82,7 +88,7 @@ page_shell(HTML) ->
      HTML,
      script(),
      "</body>\n</html>\n"
-    ].
+    ]).
 
 %% Hand-written wire-format helpers -- deliberately not the compiled
 %% JS runtime (priv/js/demo/runtime.js): this demo shows that the

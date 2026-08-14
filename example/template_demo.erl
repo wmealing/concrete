@@ -80,8 +80,14 @@ parse_query_params(Req) ->
 %% Wrap the server-rendered fragment in a full HTML page that boots the
 %% client: hydrate the state JSON, then buttons dispatch to compiled
 %% Erlang.
+%% unicode:characters_to_binary/1 re-encodes the em dash below (and any
+%% other non-ASCII source text) into real UTF-8 bytes -- the plain
+%% (non-<<>>) triple-quoted strings it lives in are charlists, so a
+%% character above codepoint 255 would otherwise be an invalid iodata
+%% element and crash cowboy_req:reply/4 (via iolist_size/1) at request
+%% time instead of at compile time.
 page_shell(HTML, StateJSON) ->
-    [
+    unicode:characters_to_binary([
      """
      <!DOCTYPE html>
      <html lang="en">
@@ -128,7 +134,7 @@ page_shell(HTML, StateJSON) ->
      </body>
      </html>
      """
-    ].
+    ]).
 
 escape_html(Bin) ->
     binary:replace(
