@@ -81,40 +81,54 @@ parse_query_params(Req) ->
 %% client: hydrate the state JSON, then buttons dispatch to compiled
 %% Erlang.
 page_shell(HTML, StateJSON) ->
-    [<<"<!DOCTYPE html>\n"
-       "<html lang=\"en\">\n<head>\n"
-       "  <meta charset=\"UTF-8\">\n"
-       "  <title>Concrete — live scoreboard</title>\n"
-       "  <link rel=\"stylesheet\" href=\"/assets/theme.css\">\n"
-       "  <style>\n"
-       "    .scoreboard { max-width: 24rem; border: 1px solid var(--border);\n"
-       "                  border-radius: var(--radius); background: var(--bg-panel);\n"
-       "                  padding: 1rem 2rem; }\n"
-       "    .scoreboard button { font-size: 1.2rem; min-width: 2.5rem; }\n"
-       "  </style>\n"
-       "</head>\n<body>\n"
-       "  <a class=\"back-link\" href=\"http://localhost:8760/\">&larr; All demos</a>\n"
-       "  <p>Server-rendered by <code>concrete_renderer:render_page/2</code>,\n"
-       "     then hydrated — the +/&#8722; buttons dispatch to the compiled\n"
-       "     <code>scoreboard_page:action/3</code> running in your browser.\n"
-       "     Query params re-render server-side:\n"
-       "     <a href=\"/?player=sam&score=100\">/?player=sam&amp;score=100</a></p>\n"
-       "  <div id=\"concrete-root\">\n">>,
+    [
+     """
+     <!DOCTYPE html>
+     <html lang="en">
+     <head>
+       <meta charset="UTF-8">
+       <title>Concrete — live scoreboard</title>
+       <link rel="stylesheet" href="/assets/theme.css">
+       <style>
+         .scoreboard { max-width: 24rem; border: 1px solid var(--border);
+                       border-radius: var(--radius); background: var(--bg-panel);
+                       padding: 1rem 2rem; }
+         .scoreboard button { font-size: 1.2rem; min-width: 2.5rem; }
+       </style>
+     </head>
+     <body>
+       <a class="back-link" href="http://localhost:8760/">&larr; All demos</a>
+       <p>Server-rendered by <code>concrete_renderer:render_page/2</code>,
+          then hydrated — the +/&#8722; buttons dispatch to the compiled
+          <code>scoreboard_page:action/3</code> running in your browser.
+          Query params re-render server-side:
+          <a href="/?player=sam&score=100">/?player=sam&amp;score=100</a></p>
+       <div id="concrete-root">
+     """,
      HTML,
-     <<"\n  </div>\n"
-       "  <h2>Hydration payload</h2>\n"
-       "  <pre>">>,
+     """
+
+       </div>
+       <h2>Hydration payload</h2>
+       <pre>
+     """,
      escape_html(StateJSON),
-     <<"</pre>\n"
-       "  <script src=\"/assets/runtime.js\"></script>\n"
-       "  <script src=\"/assets/client.js\"></script>\n"
-       "  <script src=\"/bundle.js\"></script>\n"
-       "  <script>\n"
-       "    Client.init(\"scoreboard_page\", \"concrete-root\", ">>,
+     """
+     </pre>
+       <script src="/assets/runtime.js"></script>
+       <script src="/assets/client.js"></script>
+       <script src="/bundle.js"></script>
+       <script>
+         Client.init("scoreboard_page", "concrete-root",
+     """,
      StateJSON,
-     <<");\n"
-       "  </script>\n"
-       "</body>\n</html>\n">>].
+     """
+     );
+       </script>
+     </body>
+     </html>
+     """
+    ].
 
 escape_html(Bin) ->
     binary:replace(

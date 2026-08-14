@@ -14,11 +14,13 @@
 %% Compile a hardcoded hello world component and print the JS.
 hello_world() ->
     Src =
-        "-module(hello).\n"
-        "greet(Name) -> {ok, Name}.\n"
-        "add(A, B) -> A + B.\n"
-        "label(ok) -> done;\n"
-        "label(error) -> failed.\n",
+        """
+        -module(hello).
+        greet(Name) -> {ok, Name}.
+        add(A, B) -> A + B.
+        label(ok) -> done;
+        label(error) -> failed.
+        """,
     run(Src).
 
 %% Compile an arbitrary Erlang source string and print the JS.
@@ -31,14 +33,16 @@ run(Src) ->
 %% Erlang: it writes to the DOM via the dom BIF module and reschedules
 %% itself. JS only boots counter:start/0.
 counter_src() ->
-    "-module(counter).\n"
-    "-export([start/0, tick/1]).\n"
-    "start() ->\n"
-    "    tick(0).\n"
-    "tick(N) ->\n"
-    "    dom:append_html(<<\"output\">>, integer_to_binary(N)),\n"
-    "    dom:append_html(<<\"output\">>, <<\"<br>\">>),\n"
-    "    dom:set_timeout(250, counter, tick, [N + 1]).\n".
+    """
+    -module(counter).
+    -export([start/0, tick/1]).
+    start() ->
+        tick(0).
+    tick(N) ->
+        dom:append_html(<<"output">>, integer_to_binary(N)),
+        dom:append_html(<<"output">>, <<"<br>">>),
+        dom:set_timeout(250, counter, tick, [N + 1]).
+    """.
 
 %% Compile the counter module and write the generated JS into the
 %% demo directory served by serve/0.
@@ -118,16 +122,18 @@ bundle() ->
     ok.
 
 shapes_src() ->
-    "-module(shapes).\n"
-    "-export([init/2, template/0, perimeter/2]).\n"
-    "init(_Params, Server) ->\n"
-    "    {#{state => #{area => area(3, 4)}}, Server}.\n"
-    "template() ->\n"
-    "    banner().\n"
-    "banner() -> <<\"** shapes **\">>.\n"
-    "area(W, H) -> W * H.\n"
-    "perimeter(W, H) -> double(W + H).\n"  %% dead: never called from an entry point
-    "double(X) -> X * 2.\n".               %% dead transitively (only perimeter calls it)
+    """
+    -module(shapes).
+    -export([init/2, template/0, perimeter/2]).
+    init(_Params, Server) ->
+        {#{state => #{area => area(3, 4)}}, Server}.
+    template() ->
+        banner().
+    banner() -> <<"** shapes **">>.
+    area(W, H) -> W * H.
+    perimeter(W, H) -> double(W + H).  %% dead: never called from an entry point
+    double(X) -> X * 2.                %% dead transitively (only perimeter calls it)
+    """.
 
 %% Phase 4 demo: round-trip an Erlang term through the type-tagged JSON
 %% wire format (serializer -> JSON text -> deserializer).
@@ -151,11 +157,13 @@ wire() ->
 %% render/1 function as JavaScript.
 render() ->
     Template =
-        "<div class=\"scoreboard\">\n"
-        "  <h1>{@title}</h1>\n"
-        "  <p>Next score: {@score + 1}</p>\n"
-        "  <button concrete-click=\"increment\">+</button>\n"
-        "</div>",
+        """
+        <div class="scoreboard">
+          <h1>{@title}</h1>
+          <p>Next score: {@score + 1}</p>
+          <button concrete-click="increment">+</button>
+        </div>
+        """,
     io:format("~n=== TEMPLATE (.slab) ===~n~s~n~n", [Template]),
 
     DOM = concrete_template_parser:parse_string(Template),

@@ -23,7 +23,6 @@ mount(_Props, #{state := #{id := Id}}) ->
 
 template() ->
     {inline, concrete_template_parser:parse_string(
-        "<li class=\"task\">"
-        "<span class=\"task-label\">{@label}</span>"
-        "<span id={<<\"mount-flag-\", (@id)/binary>>} class=\"mount-flag\"></span>"
-        "</li>")}.
+        """
+        <li class="task"><span class="task-label">{@label}</span><span id={<<"mount-flag-", (@id)/binary>>} class="mount-flag"></span></li>
+        """)}.

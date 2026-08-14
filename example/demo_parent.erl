@@ -98,19 +98,30 @@ ensure_listener(Ref, Port, Dispatch) ->
 render_index() ->
     Cards = [render_card(D) || D <- demos()],
     unicode:characters_to_binary([
-        <<"<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
-          "  <meta charset=\"UTF-8\">\n"
-          "  <title>Concrete -- demos</title>\n"
-          "  <link rel=\"stylesheet\" href=\"/theme.css\">\n"
-          "</head>\n<body>\n"
-          "  <h1>Concrete demos</h1>\n"
-          "  <p class=\"sub\">Every demo is pure Erlang, compiled to JavaScript, running in "
-          "your browser. Each one listens on its own port.</p>\n">>,
+        """
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+          <meta charset="UTF-8">
+          <title>Concrete -- demos</title>
+          <link rel="stylesheet" href="/theme.css">
+        </head>
+        <body>
+          <h1>Concrete demos</h1>
+          <p class="sub">Every demo is pure Erlang, compiled to JavaScript, running in your browser. Each one listens on its own port.</p>
+        """,
         Cards,
-        <<"</body>\n</html>\n">>
+        "</body>\n</html>\n"
     ]).
 
 render_card(#{title := Title, desc := Desc, port := Port}) ->
     Url = iolist_to_binary(io_lib:format("http://localhost:~w/", [Port])),
-    [<<"  <div class=\"card\">\n    <h2>">>, Title, <<"</h2>\n    <p>">>, Desc,
-     <<"</p>\n    <a href=\"">>, Url, <<"\">">>, Url, <<"</a>\n  </div>\n">>].
+    io_lib:format(
+        """
+        <div class="card">
+            <h2>~s</h2>
+            <p>~s</p>
+            <a href="~s">~s</a>
+        </div>
+        """,
+        [Title, Desc, Url, Url]).

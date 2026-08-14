@@ -52,30 +52,38 @@ hex_digit(N)              -> $a + N - 10.
 %% than served as a static file, with the secret baked directly into
 %% the boot call.
 page_html(Secret) ->
-    [<<"<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
-       "  <meta charset=\"UTF-8\">\n"
-       "  <title>Concrete -- multiplayer snake</title>\n"
-       "  <link rel=\"stylesheet\" href=\"/assets/theme.css\">\n"
-       "  <style>\n"
-       "    .legend { max-width: 320px; margin: 1em auto 0; }\n"
-       "    .legend-row { display: flex; align-items: center; gap: 0.5em;\n"
-       "                  font-size: 0.85em; color: var(--text-dim); padding: 2px 0; }\n"
-       "    .swatch { width: 14px; height: 14px; border-radius: 3px;\n"
-       "              border: 1px solid var(--border); flex: none; }\n"
-       "  </style>\n"
-       "</head>\n<body>\n"
-       "  <a class=\"back-link\" href=\"http://localhost:8760/\">&larr; All demos</a>\n"
-       "  <p>A real Erlang <code>gen_server</code> (<code>snake_game.erl</code>) owns the "
-       "board and ticks every worker's snake forward, broadcasting the new state to every "
-       "connected browser over SSE. Open this page in another tab (or another browser) to "
-       "play together -- everyone sees everyone else's snake move live.</p>\n"
-       "  <div style=\"text-align:center;\">\n"
-       "    <canvas id=\"board\" width=\"600\" height=\"400\"></canvas>\n"
-       "    <p id=\"status\" class=\"sub\"></p>\n"
-       "    <div id=\"legend\" class=\"legend\"></div>\n"
-       "  </div>\n"
-       "  <script src=\"/assets/runtime.js\"></script>\n"
-       "  <script src=\"/assets/snake/snake_client.js\"></script>\n"
-       "  <script>Interpreter.callTopLevel(\"snake_client\", \"start\", 1, "
-       "[Type.bitstring(\"">>, Secret, <<"\")]);</script>\n"
-       "</body>\n</html>\n">>].
+    [
+     """
+     <!DOCTYPE html>
+     <html lang="en">
+     <head>
+       <meta charset="UTF-8">
+       <title>Concrete -- multiplayer snake</title>
+       <link rel="stylesheet" href="/assets/theme.css">
+       <style>
+         .legend { max-width: 320px; margin: 1em auto 0; }
+         .legend-row { display: flex; align-items: center; gap: 0.5em;
+                       font-size: 0.85em; color: var(--text-dim); padding: 2px 0; }
+         .swatch { width: 14px; height: 14px; border-radius: 3px;
+                   border: 1px solid var(--border); flex: none; }
+       </style>
+     </head>
+     <body>
+       <a class="back-link" href="http://localhost:8760/">&larr; All demos</a>
+       <p>A real Erlang <code>gen_server</code> (<code>snake_game.erl</code>) owns the board and ticks every worker's snake forward, broadcasting the new state to every connected browser over SSE. Open this page in another tab (or another browser) to play together -- everyone sees everyone else's snake move live.</p>
+       <div style="text-align:center;">
+         <canvas id="board" width="600" height="400"></canvas>
+         <p id="status" class="sub"></p>
+         <div id="legend" class="legend"></div>
+       </div>
+       <script src="/assets/runtime.js"></script>
+       <script src="/assets/snake/snake_client.js"></script>
+       <script>Interpreter.callTopLevel("snake_client", "start", 1, [Type.bitstring("
+     """,
+     Secret,
+     """
+     ")]);</script>
+     </body>
+     </html>
+     """
+    ].

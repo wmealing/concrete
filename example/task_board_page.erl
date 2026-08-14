@@ -37,15 +37,6 @@ action(complete_task, _Params, #{state := #{tasks := Tasks} = S} = C) ->
 
 template() ->
     {inline, concrete_template_parser:parse_string(
-        "<div class=\"board\">"
-        "<h2>Tasks</h2>"
-        "<ul>"
-        "<:for item=\"T\" in={@tasks}>"
-        "<:component module={task_item} key={maps:get(id, T)} "
-        "id={maps:get(id, T)} label={maps:get(label, T)} />"
-        "</:for>"
-        "</ul>"
-        "<input id=\"new-task-text\" type=\"text\" placeholder=\"Task description\" />"
-        "<button concrete-click=\"add_task\">Add task</button>"
-        "<button concrete-click=\"complete_task\">Complete oldest</button>"
-        "</div>")}.
+        """
+        <div class="board"><h2>Tasks</h2><ul><:for item="T" in={@tasks}><:component module={task_item} key={maps:get(id, T)} id={maps:get(id, T)} label={maps:get(label, T)} /></:for></ul><input id="new-task-text" type="text" placeholder="Task description" /><button concrete-click="add_task">Add task</button><button concrete-click="complete_task">Complete oldest</button></div>
+        """)}.

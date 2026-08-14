@@ -54,77 +54,88 @@ init(Req, State) ->
     {ok, Req2, State}.
 
 page_shell(HTML) ->
-    [<<"<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
-       "  <meta charset=\"UTF-8\">\n"
-       "  <title>Concrete — WebSocket actions &amp; commands</title>\n"
-       "  <link rel=\"stylesheet\" href=\"/assets/theme.css\">\n"
-       "  <style>\n"
-       "    .ws-demo { max-width: 32rem; border: 1px solid var(--border);\n"
-       "               border-radius: var(--radius); background: var(--bg-panel);\n"
-       "               padding: 1rem 2rem; }\n"
-       "    #log { max-height: 12rem; overflow-y: auto; font-size: 0.8rem; }\n"
-       "  </style>\n"
-       "</head>\n<body>\n"
-       "  <a class=\"back-link\" href=\"http://localhost:8760/\">&larr; All demos</a>\n"
-       "  <p>Both buttons send one JSON message over a single WebSocket connection\n"
-       "     to <code>/concrete/ws</code>. <code>concrete_ws_handler</code> decodes it and calls\n"
-       "     <code>concrete_runtime:dispatch_action/4</code> or <code>dispatch_command/4</code>,\n"
-       "     which run <code>ws_demo_page:action/3</code> or <code>command/3</code> on the\n"
-       "     server, then reply on the same socket. The command bumps a real,\n"
-       "     persistent counter (a gen_server) -- reload this page, or open it in a\n"
-       "     second tab, and it starts from wherever it was left.</p>\n">>,
+    [
+     """
+     <!DOCTYPE html>
+     <html lang="en">
+     <head>
+       <meta charset="UTF-8">
+       <title>Concrete — WebSocket actions &amp; commands</title>
+       <link rel="stylesheet" href="/assets/theme.css">
+       <style>
+         .ws-demo { max-width: 32rem; border: 1px solid var(--border);
+                    border-radius: var(--radius); background: var(--bg-panel);
+                    padding: 1rem 2rem; }
+         #log { max-height: 12rem; overflow-y: auto; font-size: 0.8rem; }
+       </style>
+     </head>
+     <body>
+       <a class="back-link" href="http://localhost:8760/">&larr; All demos</a>
+       <p>Both buttons send one JSON message over a single WebSocket connection
+          to <code>/concrete/ws</code>. <code>concrete_ws_handler</code> decodes it and calls
+          <code>concrete_runtime:dispatch_action/4</code> or <code>dispatch_command/4</code>,
+          which run <code>ws_demo_page:action/3</code> or <code>command/3</code> on the
+          server, then reply on the same socket. The command bumps a real,
+          persistent counter (a gen_server) -- reload this page, or open it in a
+          second tab, and it starts from wherever it was left.</p>
+     """,
      HTML,
      script(),
-     <<"</body>\n</html>\n">>].
+     "</body>\n</html>\n"
+    ].
 
 %% Hand-written wire-format helpers -- deliberately not the compiled
 %% JS runtime (priv/js/demo/runtime.js): this demo shows that the
 %% concrete_ws_handler wire protocol is plain JSON any client can
 %% speak, not something that requires the compiler pipeline.
 script() ->
-    <<"  <script>\n"
-      "    function wireAtom(v) { return {type: \"atom\", value: v}; }\n"
-      "    function wireInt(v) { return {type: \"integer\", value: v}; }\n"
-      "    function wireMap(pairs) {\n"
-      "      return {type: \"map\", data: pairs.map(function(p) { return [wireAtom(p[0]), p[1]]; })};\n"
-      "    }\n"
-      "    function wireGet(node, key) {\n"
-      "      if (!node || node.type !== \"map\") return null;\n"
-      "      var pair = node.data.find(function(p) { return p[0].type === \"atom\" && p[0].value === key; });\n"
-      "      return pair ? pair[1] : null;\n"
-      "    }\n"
-      "    var log = document.getElementById(\"log\");\n"
-      "    function logLine(dir, text) {\n"
-      "      log.textContent += dir + \" \" + text + \"\\n\";\n"
-      "      log.scrollTop = log.scrollHeight;\n"
-      "    }\n"
-      "    var proto = location.protocol === \"https:\" ? \"wss:\" : \"ws:\";\n"
-      "    var ws = new WebSocket(proto + \"//\" + location.host + \"/concrete/ws\");\n"
-      "    var echoCount = 1;\n"
-      "    ws.onmessage = function(ev) {\n"
-      "      logLine(\"<-\", ev.data);\n"
-      "      var msg = JSON.parse(ev.data);\n"
-      "      if (msg.type === \"command\") {\n"
-      "        var count = wireGet(msg.state, \"count\");\n"
-      "        document.getElementById(\"count\").textContent = count ? count.value : \"?\";\n"
-      "      } else if (msg.type === \"action\") {\n"
-      "        var state = wireGet(msg.state, \"state\");\n"
-      "        var count = wireGet(state, \"count\");\n"
-      "        echoCount = count ? count.value : echoCount;\n"
-      "        document.getElementById(\"echo\").textContent = echoCount;\n"
-      "      }\n"
-      "    };\n"
-      "    function send(msg) {\n"
-      "      var text = JSON.stringify(msg);\n"
-      "      logLine(\"->\", text);\n"
-      "      ws.send(text);\n"
-      "    }\n"
-      "    document.getElementById(\"bump\").onclick = function() {\n"
-      "      send({type: \"command\", module: \"ws_demo_page\", command: \"bump\",\n"
-      "            params: {delta: 1}, state: wireMap([])});\n"
-      "    };\n"
-      "    document.getElementById(\"double\").onclick = function() {\n"
-      "      send({type: \"action\", module: \"ws_demo_page\", action: \"double\",\n"
-      "            params: {}, state: wireMap([[\"state\", wireMap([[\"count\", wireInt(echoCount)]])]])});\n"
-      "    };\n"
-      "  </script>\n">>.
+    <<
+      """
+      <script>
+        function wireAtom(v) { return {type: "atom", value: v}; }
+        function wireInt(v) { return {type: "integer", value: v}; }
+        function wireMap(pairs) {
+          return {type: "map", data: pairs.map(function(p) { return [wireAtom(p[0]), p[1]]; })};
+        }
+        function wireGet(node, key) {
+          if (!node || node.type !== "map") return null;
+          var pair = node.data.find(function(p) { return p[0].type === "atom" && p[0].value === key; });
+          return pair ? pair[1] : null;
+        }
+        var log = document.getElementById("log");
+        function logLine(dir, text) {
+          log.textContent += dir + " " + text + "\n";
+          log.scrollTop = log.scrollHeight;
+        }
+        var proto = location.protocol === "https:" ? "wss:" : "ws:";
+        var ws = new WebSocket(proto + "//" + location.host + "/concrete/ws");
+        var echoCount = 1;
+        ws.onmessage = function(ev) {
+          logLine("<-", ev.data);
+          var msg = JSON.parse(ev.data);
+          if (msg.type === "command") {
+            var count = wireGet(msg.state, "count");
+            document.getElementById("count").textContent = count ? count.value : "?";
+          } else if (msg.type === "action") {
+            var state = wireGet(msg.state, "state");
+            var count = wireGet(state, "count");
+            echoCount = count ? count.value : echoCount;
+            document.getElementById("echo").textContent = echoCount;
+          }
+        };
+        function send(msg) {
+          var text = JSON.stringify(msg);
+          logLine("->", text);
+          ws.send(text);
+        }
+        document.getElementById("bump").onclick = function() {
+          send({type: "command", module: "ws_demo_page", command: "bump",
+                params: {delta: 1}, state: wireMap([])});
+        };
+        document.getElementById("double").onclick = function() {
+          send({type: "action", module: "ws_demo_page", action: "double",
+                params: {}, state: wireMap([["state", wireMap([["count", wireInt(echoCount)]])]])});
+        };
+      </script>
+      """
+    >>.
