@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Concrete -- demos</title>
+  <link rel="stylesheet" href="/theme.css">
+</head>
+<body>
+  <h1>Concrete demos</h1>
+  <p class="sub">Every demo is pure Erlang, compiled to JavaScript, running in your browser. Each one listens on its own port.</p><div class="card">
+    <h2>Counter</h2>
+    <p>The smallest possible demo: a self-rescheduling counter loop, pure Erlang compiled straight to JavaScript.</p>
+    <a href="http://localhost:8765/">http://localhost:8765/</a>
+</div><div class="card">
+    <h2>Template / Scoreboard</h2>
+    <p>A .slab template rendered server-side on first load, then hydrated -- button clicks dispatch to a compiled action/3 running in the browser.</p>
+    <a href="http://localhost:8766/">http://localhost:8766/</a>
+</div><div class="card">
+    <h2>Todo List</h2>
+    <p>A small stateful app (add/complete/clear) persisted to localStorage, entirely compiled Erlang -- no server round trips.</p>
+    <a href="http://localhost:8767/">http://localhost:8767/</a>
+</div><div class="card">
+    <h2>Canvas Animation</h2>
+    <p>A self-scheduling animation loop drawing a rotating flower on &lt;canvas&gt; via the canvas:* BIFs.</p>
+    <a href="http://localhost:8768/">http://localhost:8768/</a>
+</div><div class="card">
+    <h2>gen_server-style Process</h2>
+    <p>A real spawn/self/!/receive generic-server loop (concrete_gen_server.erl) dispatching into a callback module, running in the browser.</p>
+    <a href="http://localhost:8769/">http://localhost:8769/</a>
+</div><div class="card">
+    <h2>Process Ring (spawn/self/send/receive)</h2>
+    <p>Six spawned worker processes passing a token around a ring, with a live canvas visualization of every send/receive hop.</p>
+    <a href="http://localhost:8770/">http://localhost:8770/</a>
+</div><div class="card">
+    <h2>Multiplayer Snake</h2>
+    <p>A real gen_server owns the board and broadcasts it over SSE to every connected browser -- open it in two tabs and watch both snakes move live.</p>
+    <a href="http://localhost:8771/">http://localhost:8771/</a>
+</div><div class="card">
+    <h2>WebSocket Actions &amp; Commands</h2>
+    <p>Plain JavaScript, no compiled bundle -- every click sends a real action/command message over one WebSocket to concrete_ws_handler, dispatched server-side. The counter is a gen_server, so it survives a reload.</p>
+    <a href="http://localhost:8772/">http://localhost:8772/</a>
+</div><div class="card">
+    <h2>three.js Spirograph</h2>
+    <p>A rotating, color-cycling spirograph drawn with three.js, loaded from a CDN &lt;script&gt; tag -- every THREE.* call is compiled Erlang, reaching the library through concrete_js, with no hand-written JavaScript at all.</p>
+    <a href="http://localhost:8773/">http://localhost:8773/</a>
+</div><div class="card">
+    <h2>Task Board (component mount + &lt;:for&gt;)</h2>
+    <p>A keyed, dynamic list of stateful child components rendered with &lt;:for&gt; -- each task keeps its own persisted state across every re-render, and its mount/2 fires exactly once, the moment it first appears.</p>
+    <a href="http://localhost:8774/">http://localhost:8774/</a>
+</div></body>
+</html>
