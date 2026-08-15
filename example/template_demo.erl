@@ -23,6 +23,7 @@ serve() ->
     serve(8766).
 
 serve(Port) ->
+    concrete_dev_reload:ensure_started(),
     {ok, _} = application:ensure_all_started(cowboy),
     TemplatesDir = filename:join(code:priv_dir(concrete), "templates"),
     application:set_env(concrete, templates_dir, TemplatesDir),
@@ -131,6 +132,7 @@ page_shell(HTML, StateJSON) ->
      """
      );
        </script>
+       <script src="http://localhost:8799/dev-reload.js"></script>
      </body>
      </html>
      """

@@ -71,6 +71,7 @@ serve() ->
     serve(8765).
 
 serve(Port) ->
+    concrete_dev_reload:ensure_started(),
     {ok, _} = application:ensure_all_started(cowboy),
     DemoDir   = filename:join([code:priv_dir(concrete), "js", "demo"]),
     IndexFile = filename:join(DemoDir, "counter/index.html"),

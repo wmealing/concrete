@@ -26,6 +26,7 @@ serve() ->
     serve(8771).
 
 serve(Port) ->
+    concrete_dev_reload:ensure_started(),
     build(),
     ensure_game_started(),
     {ok, _} = application:ensure_all_started(cowboy),

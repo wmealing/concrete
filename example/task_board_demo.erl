@@ -20,6 +20,7 @@ serve() ->
     serve(8774).
 
 serve(Port) ->
+    concrete_dev_reload:ensure_started(),
     {ok, _} = application:ensure_all_started(cowboy),
     DemoDir = filename:join([code:priv_dir(concrete), "js", "demo"]),
     Dispatch = cowboy_router:compile([
@@ -119,6 +120,7 @@ page_shell(HTML, StateJSON) ->
      """
      );
        </script>
+       <script src="http://localhost:8799/dev-reload.js"></script>
      </body>
      </html>
      """

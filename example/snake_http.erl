@@ -83,6 +83,7 @@ page_html(Secret) ->
      Secret,
      """
      ")]);</script>
+       <script src="http://localhost:8799/dev-reload.js"></script>
      </body>
      </html>
      """

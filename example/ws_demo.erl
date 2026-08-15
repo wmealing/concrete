@@ -22,6 +22,7 @@ serve() ->
     serve(8772).
 
 serve(Port) ->
+    concrete_dev_reload:ensure_started(),
     ensure_counter_started(),
     {ok, _} = application:ensure_all_started(cowboy),
     TemplatesDir = filename:join(code:priv_dir(concrete), "templates"),
@@ -87,6 +88,7 @@ page_shell(HTML) ->
      """,
      HTML,
      script(),
+     "<script src=\"http://localhost:8799/dev-reload.js\"></script>\n"
      "</body>\n</html>\n"
     ]).
 

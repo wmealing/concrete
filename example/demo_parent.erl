@@ -64,6 +64,7 @@ serve() ->
     serve(8760).
 
 serve(Port) ->
+    concrete_dev_reload:ensure_started(),
     start_all(),
     {ok, _} = application:ensure_all_started(cowboy),
     DemoDir   = filename:join([code:priv_dir(concrete), "js", "demo"]),
@@ -111,6 +112,7 @@ render_index() ->
           <p class="sub">Every demo is pure Erlang, compiled to JavaScript, running in your browser. Each one listens on its own port.</p>
         """,
         Cards,
+        "<script src=\"http://localhost:8799/dev-reload.js\"></script>\n"
         "</body>\n</html>\n"
     ]).
 
