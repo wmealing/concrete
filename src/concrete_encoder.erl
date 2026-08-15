@@ -44,9 +44,15 @@ encode_bundle(Graph, PLT) ->
     Fragments = [encode_mfa(MFA, PLT, BlockingByMod) || MFA <- MFAs],
     iolist_to_binary(Fragments).
 
+%% The PLT is also used to cache non-IR entries under MFA-shaped keys
+%% (e.g. rebar_compiler_concrete's per-page bundle digest, stored under
+%% {PageModule, '$concrete_bundle_digest', 0}), so entries whose module
+%% matches M aren't necessarily #ir_function_def{} records -- filter to
+%% the ones that actually are.
 module_defs(M, PLT) ->
     [D || {Mod, _, _} = MFA <- concrete_plt:all_mfas(PLT), Mod =:= M,
-          {ok, D} <- [concrete_plt:get(PLT, MFA)]].
+          {ok, D} <- [concrete_plt:get(PLT, MFA)],
+          is_record(D, ir_function_def)].
 
 encode_mfa({M, _F, _A} = MFA, PLT, BlockingByMod) ->
     case concrete_plt:get(PLT, MFA) of
