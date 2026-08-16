@@ -23,10 +23,12 @@
 -module(concrete_dev_reload).
 -behaviour(gen_server).
 -behaviour(cowboy_handler).
+-behaviour(cowboy_middleware).
 
 -export([ensure_started/0]).
 -export([start_link/0, init/1, handle_call/3, handle_cast/2, handle_info/2]).
 -export([init/2]). %% cowboy_handler: serves /dev-reload.js
+-export([execute/2]). %% cowboy_middleware: CORS header for every demo's origin
 
 -define(PORT, 8799).
 -define(POLL_MS, 500).
@@ -157,6 +159,19 @@ reload_beams() ->
 
 %% --- Listener ---
 
+%% Every demo lives on its own port (8760-8774), so a page's own
+%% EventSource connection back to this listener's fixed dev port is
+%% always cross-origin -- without this, the browser silently drops
+%% every event (curl doesn't enforce CORS, so this only ever shows up
+%% against a real browser). Runs before cowboy_router so the header is
+%% set on the Req before concrete_sse_handler's stream_reply/3 sends
+%% its own headers -- cowboy merges the two, explicit ones from
+%% stream_reply's own Headers map winning on conflicts, this one
+%% passing through untouched since concrete_sse_handler never sets it.
+execute(Req, Env) ->
+    Req2 = cowboy_req:set_resp_header(<<"access-control-allow-origin">>, <<"*">>, Req),
+    {ok, Req2, Env}.
+
 start_listener() ->
     Dispatch = cowboy_router:compile([
         {'_', [
@@ -164,7 +179,10 @@ start_listener() ->
             {"/dev-reload.js", ?MODULE,               #{}}
         ]}
     ]),
-    case cowboy:start_clear(?MODULE, [{port, ?PORT}], #{env => #{dispatch => Dispatch}}) of
+    case cowboy:start_clear(?MODULE, [{port, ?PORT}], #{
+        env => #{dispatch => Dispatch},
+        middlewares => [?MODULE, cowboy_router, cowboy_handler]
+    }) of
         {ok, _}                       -> ok;
         {error, {already_started, _}} -> ok;
         {error, eaddrinuse}           -> ok
